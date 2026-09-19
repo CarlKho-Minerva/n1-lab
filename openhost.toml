@@ -1,0 +1,26 @@
+[app]
+name = "n1"
+version = "0.1.0"
+description = "Carl's N=1 research lab: an archive of the experiments he runs on himself, with phone-first review tasks."
+
+[runtime.container]
+image = "Dockerfile"
+port = 8080
+
+[routing]
+health_check = "/healthz"
+# Everything except the health check sits behind the zone's owner login. This app HAS write
+# endpoints (task answers) and serves private research notes, so nothing else may ever be
+# added here. public_paths is PREFIX-matched: "/" would publish the whole app.
+public_paths = ["/healthz"]
+
+[resources]
+memory_mb = 128
+cpu_millicores = 100
+
+[data]
+app_data = true
+
+[[links]]
+name = "n1 lab"
+path = "/"

@@ -1,0 +1,3 @@
+{"title": "Sample task", "blurb": "Two placeholder items.", "intro": "Is the label right?", "items": [
+ {"id": "s1", "source": "sample", "context": "assistant: done.", "text": "did u even check", "label_lines": ["<b>correction</b>"]},
+ {"id": "s2", "source": "sample", "context": "", "text": "thanks", "label_lines": ["<b>not a correction</b>"]}]}
