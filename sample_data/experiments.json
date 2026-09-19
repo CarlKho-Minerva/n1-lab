@@ -1,0 +1,3 @@
+{"experiments": [{"slug": "sample", "title": "Sample experiment", "date": "2026-01-01", "status": "draft",
+  "question": "Does the sample data render?", "result": "Yes.", "tasks": ["sample"],
+  "body_md": "## Method\n\nReplace this file by copying a real `experiments.json` into the app data directory.\n\n| a | b |\n|---|---|\n| 1 | 2 |"}]}
