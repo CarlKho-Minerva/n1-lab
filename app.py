@@ -18,6 +18,7 @@ import json
 import mimetypes
 import os
 import re
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -345,10 +346,19 @@ class H(BaseHTTPRequestHandler):
         if not m:
             return self.send(404, '{"error":"no such route"}', "application/json")
         # Same-origin only: a cross-site page must not be able to write answers with Carl's login cookie.
+        # Sec-Fetch-Site is set by the browser and a page cannot forge it, so it decides when present.
+        # The Origin/Host comparison is only the fallback: the OpenHost router rewrites Host, which made
+        # every real same-origin POST look cross-site (403 on the phone, 2026-09-19).
         origin = self.headers.get("Origin")
-        host = self.headers.get("Host", "")
-        if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none") or (
-                origin and origin.split("://", 1)[-1] != host):
+        sfs = self.headers.get("Sec-Fetch-Site")
+        hosts = {h.strip() for h in (self.headers.get("Host", ""),
+                                     *self.headers.get("X-Forwarded-Host", "").split(",")) if h.strip()}
+        if sfs is not None:
+            refused = sfs not in ("same-origin", "none")
+        else:
+            refused = bool(origin) and origin.split("://", 1)[-1] not in hosts
+        if refused:
+            sys.stderr.write(f"refused write: sfs={sfs!r} origin={origin!r} hosts={sorted(hosts)!r}\n")
             return self.send(403, '{"error":"cross-site write refused"}', "application/json")
         slug = m.group(1)
         t, err = task(slug)
