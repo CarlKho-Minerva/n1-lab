@@ -171,7 +171,7 @@ TASK_CSS = """
 .lab{margin:14px 0}.lab div{color:var(--body);font-size:15px;line-height:22px;margin:3px 0}.lab b{color:var(--ink);font-weight:600}
 .bar{position:fixed;left:0;right:0;bottom:0;background:#0a0a0af2;border-top:1px solid var(--hair);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px;justify-content:center}
 .bar button{flex:1;max-width:240px;border:0;border-radius:8px;padding:16px 8px;font:600 16px/20px Geist,system-ui,sans-serif;cursor:pointer}
-#ok{background:var(--okbg);color:var(--ok)}#bad{background:var(--badbg);color:var(--bad)}#back{flex:0 0 64px;background:#1a1a1a;color:var(--body)}
+.ok{background:var(--okbg);color:var(--ok)}.bad{background:var(--badbg);color:var(--bad)}.mid{background:#1a1a1a;color:var(--ink)}#back{flex:0 0 64px;background:#1a1a1a;color:var(--body)}
 .on{outline:2px solid currentColor}
 #note{width:100%;background:#111;color:var(--ink);border:0;box-shadow:0 0 0 1px var(--hair);border-radius:6px;padding:12px;font:15px/22px Geist,system-ui,sans-serif;margin-top:8px}
 .prog{height:3px;background:#1a1a1a;border-radius:2px;overflow:hidden;margin:8px 0 14px}.prog i{display:block;height:100%;background:var(--ok);width:0}
@@ -247,25 +247,66 @@ def experiment_page(slug):
 
 
 TASK_JS = r"""
-const S=window.TASK,A=window.ANS;let i=0;const n=S.items.length;
-const $=x=>document.getElementById(x);
+// Verdicts come from the task (default Wrong/Right). Answers go into a localStorage queue first and
+// are retried until the server says 200, so a dropped hotspot never loses a swipe. If storage is
+// unavailable (private mode) it falls back to waiting for the server before moving on.
+const S=window.TASK,A=window.ANS;let i=0,justAnswered=false;const n=S.items.length;
+const V=S.verdicts||[{key:'wrong',label:S.wrong_label||'Wrong',swipe:'left'},{key:'right',label:S.right_label||'Right',swipe:'right'}];
+const $=x=>document.getElementById(x),QK='n1q:'+S.slug;
+let PERSIST=true;try{localStorage.setItem(QK+':t','1');localStorage.removeItem(QK+':t')}catch(e){PERSIST=false}
+function loadQ(){if(!PERSIST)return [];try{return JSON.parse(localStorage.getItem(QK)||'[]')}catch(e){return []}}
+function saveQ(q){if(PERSIST)try{localStorage.setItem(QK,JSON.stringify(q))}catch(e){}}
+for(const x of loadQ())A[x.id]=x;
 function firstOpen(){for(let k=0;k<n;k++){if(!A[S.items[k].id])return k}return n}
 function esc(s){return String(s).replace(/[–—]/g,'-').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function cls(v){return v.swipe==='left'?'bad':v.swipe==='right'?'ok':'mid'}
+function status(err){const q=loadQ().length,el=$('save');if(!el)return;
+  if(err){el.textContent='NOT SAVED: '+err;el.style.color='#ff6166';return}
+  el.textContent=q?q+' answer'+(q>1?'s':'')+' waiting to save, retrying...':'';el.style.color=q?'#ff6166':''}
+async function send(x){const r=await fetch('/api/task/'+S.slug+'/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(x)});
+  if(!r.ok)throw new Error('HTTP '+r.status+(r.status===403||r.status===400?' (server refused; tell Claude)':''))}
+let flushing=false;
+async function flush(){if(flushing)return;flushing=true;let q=loadQ();
+  try{while(q.length){await send(q[0]);q.shift();saveQ(q)}status()}catch(e){status(e.message+'. Kept on this phone; retrying.')}
+  finally{flushing=false}}
+function bar(){$('bar').innerHTML='<button id="back" aria-label="previous">Back</button>'+V.map((v,k)=>'<button class="v '+cls(v)+'" data-k="'+k+'">'+esc(v.label)+'</button>').join('');
+  $('back').onclick=()=>{if(i>0){i--;justAnswered=false;draw()}};
+  document.querySelectorAll('#bar .v').forEach(b=>b.onclick=()=>put(V[+b.dataset.k].key))}
 function draw(){
   const done=Object.keys(A).length;$('p').style.width=(100*done/n)+'%';
-  if(i>=n){$('stage').innerHTML='<h2>All '+n+' done.</h2><p>'+Object.values(A).filter(a=>a.verdict==='wrong').length+' marked wrong. The Mac pulls your answers on its own; nothing to paste.</p><p><a class="btn" href="/">Back to the lab</a></p>';$('bar').style.display='none';return}
+  if(i>=n){const c={};Object.values(A).forEach(a=>c[a.verdict]=(c[a.verdict]||0)+1);
+    $('stage').innerHTML='<h2>All '+n+' done.</h2><p>'+V.map(v=>esc(v.label)+': '+(c[v.key]||0)).join(' &middot; ')+'</p><p>The Mac pulls your answers on its own; nothing to paste.</p><div id="save"></div><p><a class="btn" href="/">Back to the lab</a></p>';
+    $('bar').style.display='none';status();return}
+  if(S.break_every&&justAnswered&&done%S.break_every===0){justAnswered=false;
+    $('stage').innerHTML='<h2>'+done+' of '+n+' done.</h2><p>Good place to stop. It resumes here next time.</p><div id="save"></div><p><button class="btn" id="go">Keep going</button></p>';
+    $('bar').style.display='none';status();$('go').onclick=()=>{draw()};return}
   $('bar').style.display='flex';const it=S.items[i],a=A[it.id]||{};
   $('stage').innerHTML='<div class="eyebrow">'+(i+1)+' of '+n+(it.source?' &middot; '+esc(it.source):'')+'</div>'+
-    (it.context?'<details><summary class="eyebrow" style="cursor:pointer;margin-top:8px">what the assistant had just said</summary><div class="ctx">'+esc(it.context)+'</div></details>':'')+
-    '<div class="msg">'+esc(it.text)+'</div><div class="lab">'+(it.label_lines||[]).map(l=>'<div>'+l+'</div>').join('')+'</div>'+
-    '<textarea id="note" rows="2" placeholder="what it should be (optional)">'+esc(a.note||'')+'</textarea><div id="save"></div>';
-  $('ok').classList.toggle('on',a.verdict==='right');$('bad').classList.toggle('on',a.verdict==='wrong');window.scrollTo(0,0)}
-async function put(verdict){const it=S.items[i],note=$('note').value.trim();$('save').textContent='saving';
-  try{const r=await fetch('/api/task/'+S.slug+'/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:it.id,verdict,note})});
-    if(!r.ok)throw new Error('HTTP '+r.status);A[it.id]={id:it.id,verdict,note};i++;draw()}
-  catch(e){$('save').textContent='NOT SAVED: '+e.message+'. Check your connection and tap again.';$('save').style.color='#ff6166'}}
-$('ok').onclick=()=>put('right');$('bad').onclick=()=>put('wrong');$('back').onclick=()=>{if(i>0){i--;draw()}};
-i=firstOpen();draw();
+    (it.context?'<details><summary class="eyebrow" style="cursor:pointer;margin-top:8px">'+esc(S.context_label||'what the assistant had just said')+'</summary><div class="ctx">'+esc(it.context)+'</div></details>':'')+
+    '<div class="msg" id="card">'+esc(it.text)+'</div><div class="lab">'+(it.label_lines||[]).map(l=>'<div>'+l+'</div>').join('')+'</div>'+
+    '<textarea id="note" rows="2" placeholder="note (optional)">'+esc(a.note||'')+'</textarea><div id="save"></div>';
+  document.querySelectorAll('#bar .v').forEach(b=>b.classList.toggle('on',V[+b.dataset.k].key===a.verdict));
+  const cd=$('card');if(S.card_end&&cd){cd.style.maxHeight='48vh';cd.scrollTop=cd.scrollHeight}
+  swipe(cd);status();window.scrollTo(0,0)}
+async function put(verdict){const it=S.items[i],note=($('note')||{value:''}).value.trim(),x={id:it.id,verdict,note};
+  if(!PERSIST){status();$('save').textContent='saving';
+    try{await send(x)}catch(e){status(e.message+'. Check your connection and tap again.');return}}
+  else{saveQ(loadQ().filter(y=>y.id!==it.id).concat([x]))}
+  A[it.id]=x;i++;justAnswered=true;draw();if(PERSIST)flush()}
+function swipe(el){const L=V.find(v=>v.swipe==='left'),R=V.find(v=>v.swipe==='right');if(!el||(!L&&!R))return;
+  let x0=null,y0=null,dx=0,dy=0;el.style.touchAction='pan-y';
+  el.addEventListener('pointerdown',e=>{x0=e.clientX;y0=e.clientY;dx=dy=0;el.style.transition='none'});
+  el.addEventListener('pointermove',e=>{if(x0===null)return;dx=e.clientX-x0;dy=e.clientY-y0;
+    if(Math.abs(dx)>Math.abs(dy)){el.style.transform='translateX('+dx+'px) rotate('+(dx/40)+'deg)';
+      el.style.boxShadow='0 0 0 2px '+(dx>0?'var(--ok)':'var(--bad)')}});
+  const end=()=>{if(x0===null)return;el.style.transition='transform .15s';el.style.transform='';el.style.boxShadow='';
+    const go=Math.abs(dx)>90&&Math.abs(dx)>1.5*Math.abs(dy);x0=null;
+    if(go&&dx>0&&R)put(R.key);else if(go&&dx<0&&L)put(L.key)};
+  el.addEventListener('pointerup',end);el.addEventListener('pointercancel',end)}
+document.addEventListener('keydown',e=>{if(e.target.tagName==='TEXTAREA')return;
+  const k={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up'}[e.key],v=k&&V.find(v=>v.swipe===k);if(v&&i<n)put(v.key)});
+window.addEventListener('online',flush);document.addEventListener('visibilitychange',()=>{if(!document.hidden)flush()});setInterval(flush,15000);
+bar();i=firstOpen();draw();flush();
 """
 
 
@@ -276,8 +317,7 @@ def task_page(slug):
     t = dict(t, slug=slug)
     body = (f'<nav><a href="/">Lab</a><span class="eyebrow">{esc(t.get("title", slug))}</span></nav>'
             f'<p style="margin:0">{esc(t.get("intro", ""))}</p><div class="prog"><i id="p"></i></div><div id="stage"></div>'
-            f'<div class="bar" id="bar"><button id="back" aria-label="previous">Back</button>'
-            f'<button id="bad">{esc(t.get("wrong_label", "Wrong"))}</button><button id="ok">{esc(t.get("right_label", "Right"))}</button></div>'
+            f'<div class="bar" id="bar"></div>'
             f"<script>window.TASK={json.dumps(t).replace('</', '<\\/')};window.ANS={json.dumps(answers(slug)).replace('</', '<\\/')};{TASK_JS}</script>")
     return page(t.get("title", slug), body, TASK_CSS)
 
@@ -370,7 +410,8 @@ class H(BaseHTTPRequestHandler):
                 raise ValueError("body size")
             req = json.loads(self.rfile.read(n))
             item, verdict = str(req["id"]), req["verdict"]
-            if verdict not in ("right", "wrong") or item not in {str(i["id"]) for i in t.get("items", [])}:
+            keys = {v["key"] for v in t.get("verdicts", [])} or {"right", "wrong"}
+            if verdict not in keys or item not in {str(i["id"]) for i in t.get("items", [])}:
                 raise ValueError("unknown id or verdict")
             row = {"id": item, "verdict": verdict, "note": str(req.get("note", ""))[:1000],
                    "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "ua": self.headers.get("User-Agent", "")[:80]}
