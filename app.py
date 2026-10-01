@@ -167,7 +167,8 @@ nav{display:flex;justify-content:space-between;align-items:center;gap:12px;margi
 
 TASK_CSS = """
 #stage{min-height:52vh}.ctx{font-size:13px;line-height:19px;color:var(--mute);white-space:pre-wrap;max-height:26vh;overflow:auto;border-left:2px solid var(--hair);padding:2px 0 2px 12px;margin:10px 0}
-.msg{background:#161616;border-radius:8px;padding:14px 16px;white-space:pre-wrap;word-break:break-word;color:var(--ink);box-shadow:0 0 0 1px var(--hair);margin:10px 0;max-height:34vh;overflow:auto}
+.msg p{margin:0 0 10px}.msg ul,.msg ol{margin:4px 0 10px;padding-left:22px}.msg code{font:13px 'Geist Mono',ui-monospace,monospace;background:#0d0d0d;padding:1px 4px;border-radius:4px}
+.msg{font-size:16px;line-height:1.6;background:#161616;border-radius:8px;padding:14px 16px;word-break:break-word;color:var(--ink);box-shadow:0 0 0 1px var(--hair);margin:10px 0;max-height:34vh;overflow:auto}
 .lab{margin:14px 0}.lab div{color:var(--body);font-size:15px;line-height:22px;margin:3px 0}.lab b{color:var(--ink);font-weight:600}
 .bar{position:fixed;left:0;right:0;bottom:0;background:#0a0a0af2;border-top:1px solid var(--hair);padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:flex;gap:8px;justify-content:center}
 .bar button{flex:1;max-width:240px;border:0;border-radius:8px;padding:16px 8px;font:600 16px/20px Geist,system-ui,sans-serif;cursor:pointer}
@@ -259,6 +260,8 @@ function saveQ(q){if(PERSIST)try{localStorage.setItem(QK,JSON.stringify(q))}catc
 for(const x of loadQ())A[x.id]=x;
 function firstOpen(){for(let k=0;k<n;k++){if(!A[S.items[k].id])return k}return n}
 function esc(s){return String(s).replace(/[–—]/g,'-').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+// Markdown rendered and sanitised (agent text can carry raw HTML); escaped plain text without the CDN.
+function md(t){return (window.marked&&window.DOMPurify)?DOMPurify.sanitize(marked.parse(String(t).replace(/[–—]/g,'-'),{breaks:true})):esc(t)}
 function cls(v){return v.swipe==='left'?'bad':v.swipe==='right'?'ok':'mid'}
 function status(err){const q=loadQ().length,el=$('save');if(!el)return;
   if(err){el.textContent='NOT SAVED: '+err;el.style.color='#ff6166';return}
@@ -286,7 +289,7 @@ function draw(){
   $('bar').style.display='flex';const it=S.items[i],a=A[it.id]||{};
   $('stage').innerHTML='<div class="eyebrow">'+(i+1)+' of '+n+(it.source?' &middot; '+esc(it.source):'')+'</div>'+
     (it.context?'<details><summary class="eyebrow" style="cursor:pointer;margin-top:8px">'+esc(S.context_label||'what the assistant had just said')+'</summary><div class="ctx">'+esc(it.context)+'</div></details>':'')+
-    '<div class="msg" id="card">'+esc(it.text)+'</div><div class="lab">'+(it.label_lines||[]).map(l=>'<div>'+l+'</div>').join('')+'</div>'+
+    '<div class="msg" id="card">'+md(it.text)+'</div><div class="lab">'+(it.label_lines||[]).map(l=>'<div>'+l+'</div>').join('')+'</div>'+
     '<textarea id="note" rows="2" placeholder="note (optional)">'+esc(a.note||'')+'</textarea><div id="save"></div>';
   document.querySelectorAll('#bar .v').forEach(b=>b.classList.toggle('on',V[+b.dataset.k].key===a.verdict));
   const cd=$('card');if(S.card_end&&cd){cd.style.maxHeight='48vh';cd.scrollTop=cd.scrollHeight}
@@ -322,7 +325,9 @@ def task_page(slug):
             f'<p style="margin:0">{esc(t.get("intro", ""))}</p><div class="prog"><i id="p"></i></div><div id="stage"></div>'
             f'<div class="bar" id="bar"></div>'
             f"<script>window.TASK={json.dumps(t).replace('</', '<\\/')};window.ANS={json.dumps(answers(slug)).replace('</', '<\\/')};{TASK_JS}</script>")
-    return page(t.get("title", slug), body, TASK_CSS)
+    libs = ('<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>'
+            '<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>')
+    return page(t.get("title", slug), libs + body, TASK_CSS)
 
 
 # ---------------------------------------------------------------- server
