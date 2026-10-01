@@ -266,8 +266,11 @@ function status(err){const q=loadQ().length,el=$('save');if(!el)return;
 async function send(x){const r=await fetch('/api/task/'+S.slug+'/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(x)});
   if(!r.ok)throw new Error('HTTP '+r.status+(r.status===403||r.status===400?' (server refused; tell Claude)':''))}
 let flushing=false;
-async function flush(){if(flushing)return;flushing=true;let q=loadQ();
-  try{while(q.length){await send(q[0]);q.shift();saveQ(q)}status()}catch(e){status(e.message+'. Kept on this phone; retrying.')}
+async function flush(){if(flushing)return;flushing=true;
+  // Re-read the queue each pass and drop only the answer just sent: a swipe made mid-upload must never
+  // be overwritten by a stale copy of the queue (lost-answer race found in testing 2026-10-01).
+  const same=(a,b)=>a.id===b.id&&a.verdict===b.verdict&&a.note===b.note;
+  try{let q;while((q=loadQ()).length){const x=q[0];await send(x);saveQ(loadQ().filter(y=>!same(y,x)))}status()}catch(e){status(e.message+'. Kept on this phone; retrying.')}
   finally{flushing=false}}
 function bar(){$('bar').innerHTML='<button id="back" aria-label="previous">Back</button>'+V.map((v,k)=>'<button class="v '+cls(v)+'" data-k="'+k+'">'+esc(v.label)+'</button>').join('');
   $('back').onclick=()=>{if(i>0){i--;justAnswered=false;draw()}};
