@@ -11,6 +11,8 @@ Content lives OUTSIDE this repo, in the app's data dir, and is re-read on every 
     $OPENHOST_APP_DATA_DIR/tasks/<slug>.json    review tasks
     $OPENHOST_APP_DATA_DIR/files/*              attachments (rendered notebooks, write-ups)
     $OPENHOST_APP_DATA_DIR/responses/<slug>.jsonl   Carl's answers, appended by POST, pulled home by the Mac
+    $OPENHOST_APP_DATA_DIR/voice/samples/<uuid>.{wav,json}   explicitly labelled voice samples (voice_store.py);
+                                                collection only, nothing here trains or verifies
 Copy content in with `oh app ssh` (tools/push.sh). The repo holds code and sample data only.
 """
 import html
@@ -23,6 +25,8 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import voice_store
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("OPENHOST_APP_DATA_DIR", os.path.join(HERE, "sample_data"))
 PORT = int(os.environ.get("PORT", "8080"))
@@ -31,6 +35,12 @@ SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 FILE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 MAX_BODY = 64 * 1024
 LOCK = threading.Lock()
+VOICE_HTML = os.path.join(HERE, "voice.html")                 # owned by the frontend; served as-is
+VOICE_CLIP_RE = re.compile(r"^/api/voice/clip/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.wav$")
+
+
+def voice():
+    return voice_store.VoiceStore(os.path.join(DATA, "voice"))
 
 # ---------------------------------------------------------------- content
 
@@ -197,6 +207,10 @@ def index_page():
              'Negative results stay in.</p>']
     if err:
         parts.append(f'<div class="err">{esc(err)}</div>')
+    parts.append('<a class="card" href="/voice"><div class="row"><span class="pill">voice lab</span>'
+                 '<span class="eyebrow">collection only</span></div><h3>Record labelled voice samples</h3>'
+                 '<p>Label clips as me, someone else, a replay, background or a mention. Saved privately on this '
+                 'zone; nothing is trained or verified here.</p></a>')
     todo = []
     for e in exps:
         for slug in e.get("tasks", []):
@@ -361,6 +375,29 @@ class H(BaseHTTPRequestHandler):
                              "application/json")
         if path == "/":
             return self.send(200, index_page())
+        if path == "/voice":
+            try:
+                with open(VOICE_HTML, "rb") as fh:
+                    return self.send(200, fh.read())
+            except OSError as exc:                                 # loud: a missing asset is a build bug, not a 404
+                return self.send(500, page("Voice lab", '<nav><a href="/">Lab</a></nav><h1>Voice lab is not built.</h1>'
+                                           f'<div class="err">{esc(f"voice.html missing from the image: {exc}")}</div>'))
+        if path == "/api/voice/status":
+            try:
+                return self.send(200, json.dumps(voice().status(), ensure_ascii=False), "application/json")
+            except OSError as exc:
+                return self.send(500, json.dumps({"ok": False, "error": f"could not read voice store: {exc}"}),
+                                 "application/json")
+        m = VOICE_CLIP_RE.match(path)
+        if m:
+            try:
+                data, err = voice().clip(m.group(1))
+            except OSError as exc:
+                return self.send(500, json.dumps({"ok": False, "error": f"could not read clip: {exc}"}), "application/json")
+            if data is None:
+                return self.send(404 if err == "no such sample" else 500,
+                                 json.dumps({"ok": False, "error": err}), "application/json")
+            return self.send(200, data, "audio/wav", "private, no-store")
         m = re.match(r"^/x/([A-Za-z0-9_-]{1,64})$", path)
         if m:
             out = experiment_page(m.group(1))
@@ -389,14 +426,11 @@ class H(BaseHTTPRequestHandler):
 
     do_HEAD = do_GET
 
-    def do_POST(self):
-        m = re.match(r"^/api/task/([A-Za-z0-9_-]{1,64})/answer$", self.path.split("?", 1)[0])
-        if not m:
-            return self.send(404, '{"error":"no such route"}', "application/json")
-        # Same-origin only: a cross-site page must not be able to write answers with Carl's login cookie.
-        # Sec-Fetch-Site is set by the browser and a page cannot forge it, so it decides when present.
-        # The Origin/Host comparison is only the fallback: the OpenHost router rewrites Host, which made
-        # every real same-origin POST look cross-site (403 on the phone, 2026-09-19).
+    def cross_site(self):
+        """Same-origin only: a cross-site page must not be able to write with Carl's login cookie.
+        Sec-Fetch-Site is set by the browser and a page cannot forge it, so it decides when present.
+        The Origin/Host comparison is only the fallback: the OpenHost router rewrites Host, which made
+        every real same-origin POST look cross-site (403 on the phone, 2026-09-19)."""
         origin = self.headers.get("Origin")
         sfs = self.headers.get("Sec-Fetch-Site")
         hosts = {h.strip() for h in (self.headers.get("Host", ""),
@@ -407,6 +441,16 @@ class H(BaseHTTPRequestHandler):
             refused = bool(origin) and origin.split("://", 1)[-1] not in hosts
         if refused:
             sys.stderr.write(f"refused write: sfs={sfs!r} origin={origin!r} hosts={sorted(hosts)!r}\n")
+        return refused
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/api/voice/sample":
+            return self.post_voice_sample()
+        m = re.match(r"^/api/task/([A-Za-z0-9_-]{1,64})/answer$", path)
+        if not m:
+            return self.send(404, '{"error":"no such route"}', "application/json")
+        if self.cross_site():
             return self.send(403, '{"error":"cross-site write refused"}', "application/json")
         slug = m.group(1)
         t, err = task(slug)
@@ -434,6 +478,50 @@ class H(BaseHTTPRequestHandler):
         except OSError as exc:                                  # the phone shows NOT SAVED; never a silent 200
             return self.send(500, json.dumps({"error": f"could not write: {exc}"}), "application/json")
         return self.send(200, '{"ok":true}', "application/json")
+
+    def post_voice_sample(self):
+        """POST /api/voice/sample. Every failure path answers ok:false with a NOT SAVED error; never a silent 200."""
+        def fail(code, msg):
+            return self.send(code, json.dumps({"ok": False, "error": f"NOT SAVED: {msg}"}, ensure_ascii=False),
+                             "application/json")
+        if self.cross_site():
+            return fail(403, "cross-site write refused")
+        try:
+            n = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            return fail(411, "Content-Length required")
+        if n <= 0:
+            return fail(400, "empty body")
+        if n > voice_store.MAX_JSON_BYTES:
+            # Refuse without parsing. Drain a bounded amount first so the client reads the 413 instead of a
+            # connection reset; anything bigger than the drain cap gets the reset and that is fine.
+            left = min(n, 4 * voice_store.MAX_JSON_BYTES)
+            while left > 0:
+                chunk = self.rfile.read(min(left, 65536))
+                if not chunk:
+                    break
+                left -= len(chunk)
+            self.close_connection = True
+            return fail(413, f"body larger than {voice_store.MAX_JSON_BYTES} bytes")
+        raw = self.rfile.read(n)
+        if len(raw) != n:
+            return fail(400, "body shorter than Content-Length")
+        try:
+            req = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            return fail(400, f"body is not valid JSON: {str(exc)[:120]}")
+        try:
+            meta, pcm = voice_store.parse_sample(req)
+        except voice_store.ValidationError as exc:
+            return fail(400, str(exc))
+        try:
+            record, created = voice().save(meta, pcm, {"ua": self.headers.get("User-Agent", "")[:80]})
+        except voice_store.ConflictError as exc:
+            return fail(409, str(exc))
+        except OSError as exc:
+            return fail(500, f"could not write: {exc}")
+        return self.send(200, json.dumps({"ok": True, "created": created, "sample": record}, ensure_ascii=False),
+                         "application/json")
 
 
 if __name__ == "__main__":

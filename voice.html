@@ -1,0 +1,829 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Voice lab - n=1</title>
+<style>
+/* Base styles mirror app.py CSS so /voice looks like the rest of the lab. No external assets:
+   the two fonts are served by app.py itself from /fonts. */
+@font-face{font-family:Geist;src:url(/fonts/geist.woff2) format('woff2-variations');font-weight:100 900;font-display:swap}
+@font-face{font-family:'Geist Mono';src:url(/fonts/geist-mono.woff2) format('woff2-variations');font-weight:100 900;font-display:swap}
+:root{--page:#0a0a0a;--card:#111111;--hair:#262626;--ink:#ededed;--body:#a1a1a1;--mute:#7a7a7a;--ok:#52a8ff;--okbg:#0d2440;--bad:#ff6166;--badbg:#3c1618;--warn:#f5a623;--warnbg:#33260d;--good:#3ecf8e;--goodbg:#0e2a1e}
+*{box-sizing:border-box}[hidden]{display:none!important}html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--page);color:var(--ink);font:16px/24px Geist,Inter,system-ui,-apple-system,sans-serif}
+::selection{background:#ededed;color:#171717}
+main{max-width:760px;margin:0 auto;padding:24px 16px 96px}
+a{color:var(--ok);text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:32px;line-height:40px;font-weight:600;letter-spacing:-1.28px;margin:8px 0 8px}
+h2{font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.96px;margin:32px 0 8px}
+h3{font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.6px;margin:24px 0 8px}
+h4{font-size:16px;font-weight:600;margin:20px 0 6px}
+p,li{color:var(--body)}strong{color:var(--ink);font-weight:600}ul{padding-left:20px}
+code,.mono{font:13px/20px 'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
+code{background:#1a1a1a;border-radius:4px;padding:1px 5px;color:var(--ink)}
+.eyebrow{font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;color:var(--mute)}
+.card{display:block;background:var(--card);border-radius:8px;padding:20px;margin:16px 0;box-shadow:0 0 0 1px var(--hair)}
+.card h3{margin:6px 0 6px}.card p{margin:6px 0}
+.pill{display:inline-block;font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;padding:3px 9px;border-radius:9999px;background:var(--okbg);color:var(--ok)}
+.pill.warn{background:var(--warnbg);color:var(--warn)}.pill.bad{background:var(--badbg);color:var(--bad)}.pill.mute{background:#1a1a1a;color:var(--mute)}.pill.good{background:var(--goodbg);color:var(--good)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tw{overflow-x:auto;margin:12px 0}table{border-collapse:collapse;width:100%;font-size:14px;line-height:20px}
+th{font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;color:var(--mute);text-align:left;padding:8px 10px;background:#0f0f0f}
+td{padding:8px 10px;border-top:1px solid var(--hair);color:var(--body);vertical-align:top}
+.btn{display:inline-block;border:0;border-radius:6px;padding:12px 18px;min-height:44px;font:500 15px/20px Geist,system-ui,sans-serif;background:var(--ink);color:#0a0a0a;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--ink);box-shadow:0 0 0 1px var(--hair)}
+.btn.danger{background:var(--badbg);color:var(--bad)}.btn.accent{background:var(--okbg);color:var(--ok)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.err{background:var(--badbg);color:var(--bad);border-radius:8px;padding:12px 16px;margin:16px 0}
+.warnbox{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:12px 16px;margin:12px 0;font-size:14px;line-height:20px}
+.warnbox strong{color:var(--warn)}
+nav{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}nav .eyebrow{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+:focus-visible{outline:2px solid var(--ok);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* page specific */
+label,legend{color:var(--body);font-size:14px;line-height:20px}
+select,textarea,input[type=text]{width:100%;background:#0d0d0d;color:var(--ink);border:0;box-shadow:0 0 0 1px var(--hair);border-radius:6px;padding:12px;font:15px/22px Geist,system-ui,sans-serif;margin-top:6px}
+select{min-height:44px}
+fieldset{border:0;padding:0;margin:14px 0 0}
+.seg{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.seg label{position:relative;display:inline-flex;align-items:center;min-height:44px;padding:10px 14px;border-radius:6px;box-shadow:0 0 0 1px var(--hair);color:var(--ink);font-size:15px;cursor:pointer;background:#0d0d0d}
+.seg input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.seg input:checked+span{color:var(--ok)}.seg label:has(input:checked){box-shadow:0 0 0 2px var(--ok);background:var(--okbg)}
+.seg label:has(input:disabled){opacity:.55;cursor:not-allowed}
+.seg input:focus-visible+span{outline:2px solid var(--ok);outline-offset:4px;border-radius:2px}
+canvas{display:block;width:100%;background:#0d0d0d;border-radius:6px;box-shadow:0 0 0 1px var(--hair)}
+#wave{height:120px}#clipwave{height:110px;cursor:pointer;touch-action:none}
+.meter{height:8px;background:#1a1a1a;border-radius:4px;overflow:hidden;margin:8px 0 4px}.meter i{display:block;height:100%;width:0;background:var(--ok)}
+.meter i.hot{background:var(--warn)}.meter i.clip{background:var(--bad)}
+.kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 12px;margin:10px 0 0}
+.kv div{font:13px/20px 'Geist Mono',ui-monospace,monospace;color:var(--body)}.kv b{color:var(--ink);font-weight:500}.kv .bad{color:var(--bad)}.kv .good{color:var(--good)}
+.count{font:600 56px/60px 'Geist Mono',ui-monospace,monospace;letter-spacing:-2px;color:var(--ink);text-align:center;margin:8px 0}
+.count small{display:block;font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;color:var(--mute);letter-spacing:0}
+.steps{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin:10px 0 4px}
+.steps i{display:block;height:10px;border-radius:2px;background:#1a1a1a}.steps i.fit{background:var(--ok)}.steps i.test{background:var(--warn)}.steps i.next{box-shadow:0 0 0 1px var(--ink) inset}
+.prompt{background:#161616;border-radius:8px;padding:14px 16px;color:var(--ink);font-size:18px;line-height:28px;box-shadow:0 0 0 1px var(--hair);margin:10px 0}
+.prompt small{display:block;color:var(--mute);font-size:13px;line-height:18px;margin-top:6px}
+.bars{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;margin:10px 0}
+.bars .lab{font:13px/18px 'Geist Mono',ui-monospace,monospace;color:var(--body)}
+.bars .track{display:flex;flex-direction:column;gap:3px}.bars .track i{display:block;height:9px;border-radius:2px;min-width:2px}
+.bars .track i.fit{background:var(--ok)}.bars .track i.test{background:var(--warn)}
+.legend{display:flex;gap:14px;font:12px/16px 'Geist Mono',ui-monospace,monospace;color:var(--mute)}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:5px}
+.list .item{display:grid;grid-template-columns:1fr auto;gap:6px 12px;border-top:1px solid var(--hair);padding:12px 0}
+.list .item:first-child{border-top:0}
+.list .meta{font:12px/18px 'Geist Mono',ui-monospace,monospace;color:var(--mute);word-break:break-word}
+.spark{width:120px;height:28px;background:transparent;box-shadow:none;border-radius:0}
+audio{width:100%;max-width:320px;height:36px;margin-top:6px;filter:invert(.9) hue-rotate(180deg)}
+#live{font:13px/20px 'Geist Mono',ui-monospace,monospace;color:var(--mute);min-height:20px;margin-top:8px}
+#savestate{font:13px/20px 'Geist Mono',ui-monospace,monospace;min-height:20px;margin-top:8px;color:var(--mute)}
+#savestate.bad{color:var(--bad)}#savestate.good{color:var(--good)}
+.stack{display:flex;flex-direction:column;gap:8px}
+.stack .btn{flex:0 0 auto}
+@media (min-width:520px){.stack{flex-direction:row;flex-wrap:wrap}.stack .btn{flex:1 1 160px}}
+.footnote{font-size:13px;line-height:20px;color:var(--mute)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+<nav><a href="/">Lab</a><span class="eyebrow">voice · collection only</span></nav>
+
+<div class="row"><span class="pill mute" id="policy">policy: loading</span><span class="eyebrow" id="sessionpill">session …</span></div>
+<h1>Does it hear me?</h1>
+<p>Ten hand-labelled clips of me addressing Jarvis, plus negatives, so a later test can ask two things:
+can a wake check tell <strong>addressing</strong> Jarvis from <strong>mentioning</strong> it, and can it tell
+<strong>me live</strong> from <strong>me replayed</strong>. Each clip is five seconds; the context capture keeps the
+five seconds before the button as well.</p>
+<p><strong>This page only collects.</strong> Saved clips sync to your Mac for local speaker-reference diagnostics on the existing 30-minute pull schedule. There is no liveness or intent classifier and no deploy switch. The microphone starts only when you press the button and stops when this page is hidden.</p>
+
+<div id="unsupported" class="err" hidden>This browser does not expose getUserMedia or Web Audio, so nothing here can run. Open the page in Safari or Chrome over HTTPS.</div>
+
+<!-- 1 · microphone -->
+<section class="card" aria-labelledby="h-mic">
+  <div class="eyebrow">1 · microphone</div>
+  <h3 id="h-mic">Live input</h3>
+  <label for="mic">Microphone</label>
+  <select id="mic" aria-describedby="michelp"><option value="">Default microphone</option></select>
+  <p id="michelp" class="footnote">Names appear after you grant access. Processing is requested <em>off</em> (no echo cancellation, noise suppression or auto gain) because this study looks at the raw waveform; the browser may ignore that, so the actual settings are shown below.</p>
+  <div class="stack" style="margin-top:12px">
+    <button class="btn" id="start" type="button">Start microphone</button>
+    <button class="btn ghost" id="stop" type="button" disabled>Stop</button>
+  </div>
+  <canvas id="wave" width="720" height="120" role="img" aria-label="Live waveform of the last three seconds" style="margin-top:14px"></canvas>
+  <div class="meter" aria-hidden="true"><i id="meterbar"></i></div>
+  <div class="row"><span class="mono" id="rms">RMS - dBFS</span><span class="mono" id="peak">peak -</span><span class="pill bad" id="clip" hidden>clipping</span></div>
+  <div class="kv" id="settings" aria-live="polite"></div>
+  <div id="live" role="status" aria-live="polite"></div>
+</section>
+
+<!-- 2 · label -->
+<section class="card" aria-labelledby="h-label">
+  <div class="eyebrow">2 · what this clip is</div>
+  <h3 id="h-label">Label before you record</h3>
+  <p class="footnote">Pick the label and the split first. They freeze the moment a recording starts and stay frozen until that clip is saved or discarded, so a clip cannot be relabelled by accident afterwards.</p>
+  <fieldset id="labelset">
+    <legend>Label</legend>
+    <div class="seg" id="labels"></div>
+  </fieldset>
+  <fieldset id="splitset">
+    <legend>Split</legend>
+    <div class="seg" id="splits"></div>
+    <p class="footnote" style="margin-top:8px"><strong>fit</strong> may be used to fit something later. <strong>test</strong> is held out and never looked at while fitting. Decide before capture, not after hearing the clip.</p>
+  </fieldset>
+  <div id="frozen" class="warnbox" hidden>Label and split are frozen for the pending clip. Save or discard it to change them.</div>
+
+  <h4>Recommended sequence for carl_live</h4>
+  <p class="footnote">Ten clips in this session: seven <strong>fit</strong>, then three <strong>test</strong>. The guided sequence switches the split for you before the next capture. Same-session tests are exploratory, not independent validation; collect later-session tests and other-speaker examples too.</p>
+  <div class="steps" id="steps" role="img" aria-label="Progress through the ten-step sequence"></div>
+  <div class="row"><span class="mono" id="stepstext"></span><button class="btn ghost" id="userec" type="button" style="min-height:36px;padding:8px 12px">Use recommended</button></div>
+
+  <h4>Draft prompts</h4>
+  <p class="footnote">Written by the agent for this study, not Carl's own statements. Say them in your own words if you prefer, then write what you actually said in the note. <strong>Never say card numbers, account numbers, passwords or anything you would not want kept</strong>: the clip is stored.</p>
+  <div class="prompt" id="prompt"></div>
+  <div class="row"><button class="btn ghost" id="nextprompt" type="button" style="min-height:36px;padding:8px 12px">Another prompt</button></div>
+
+  <label for="note" style="display:block;margin-top:14px">Note (optional, 500 characters)</label>
+  <textarea id="note" rows="2" maxlength="500" placeholder="what you actually said, room, distance, device that played a replay..."></textarea>
+
+  <div class="row" style="margin-top:14px"><span class="mono" id="sessiontext"></span><button class="btn ghost" id="newsession" type="button" style="min-height:36px;padding:8px 12px">New session</button></div>
+  <p class="footnote">One session per sitting and per speaker. Use a fresh session when someone else records <code>other_live</code>, or when you switch to <code>carl_replay</code>.</p>
+</section>
+
+<!-- 3 · capture -->
+<section class="card" aria-labelledby="h-cap">
+  <div class="eyebrow">3 · capture</div>
+  <h3 id="h-cap">Record</h3>
+  <div class="count" id="countdown" aria-hidden="true">5.0<small id="countlabel">seconds</small></div>
+  <div class="stack">
+    <button class="btn" id="rec" type="button" disabled>Record 5 s</button>
+    <button class="btn accent" id="ctx" type="button" disabled>Capture context</button>
+    <button class="btn danger" id="abort" type="button" hidden>Cancel recording</button>
+  </div>
+  <div class="meter" aria-hidden="true"><i id="prebuf" style="background:var(--mute)"></i></div>
+  <p class="footnote" id="ctxhelp"><strong>Capture context</strong> keeps the five seconds already in memory and records five more, with a marker at 5.0 s. Press it right as you say the wake word. The marker is <em>when you pressed</em>, not where the word is; exact wake alignment is not claimed. It unlocks once five seconds of live audio are buffered.</p>
+  <p class="footnote">Audio stays in this page's memory until you press Save. Nothing is written anywhere by recording alone.</p>
+</section>
+
+<!-- pending clip -->
+<section class="card" id="pending" aria-labelledby="h-pend" hidden>
+  <div class="eyebrow">pending clip · not saved</div>
+  <h3 id="h-pend">Listen, then decide</h3>
+  <div class="row" id="pendpills"></div>
+  <canvas id="clipwave" width="720" height="110" role="img" aria-label="Waveform of the pending clip. Click or tap to move the playhead."></canvas>
+  <div class="kv" id="clipmeta"></div>
+  <div class="stack" style="margin-top:12px">
+    <button class="btn ghost" id="play" type="button">Play</button>
+    <button class="btn ghost" id="tomarker" type="button" hidden>Jump to marker (5.0 s)</button>
+  </div>
+  <div class="warnbox" style="margin-top:14px"><strong>Save uploads this audio.</strong> It goes to the N1 lab on OpenHost behind your owner login, as a private file. It is not local-only. Discard throws it away without any upload.</div>
+  <div class="stack">
+    <button class="btn" id="save" type="button">Save to lab</button>
+    <button class="btn danger" id="discard" type="button">Discard</button>
+  </div>
+  <div id="savestate" role="status" aria-live="assertive"></div>
+</section>
+
+<!-- saved -->
+<section class="card" aria-labelledby="h-saved">
+  <div class="eyebrow">saved so far</div>
+  <div class="row" style="justify-content:space-between"><h3 id="h-saved" style="margin:6px 0">Held-out vs fit</h3><button class="btn ghost" id="refresh" type="button" style="min-height:36px;padding:8px 12px">Refresh</button></div>
+  <div id="statuserr" class="err" hidden></div>
+  <p class="mono" id="counts"></p>
+  <div class="legend"><span><i style="background:var(--ok)"></i>fit</span><span><i style="background:var(--warn)"></i>test (held out)</span></div>
+  <div class="bars" id="bars"></div>
+  <div class="warnbox"><strong>Identity is not liveness.</strong> A clip that sounds like Carl is not proof that Carl is in the room; <code>carl_replay</code> exists to measure exactly that gap. Nothing is claimed about either until the held-out set is scored.</div>
+  <div class="warnbox"><strong>Fit and test stay separate.</strong> The Mac can build a provisional reference from at least three fit-only carl_live clips. Its fixed 0.60 threshold is uncalibrated; it is not an authorization rule. Replays and mentions are reported separately, never mistaken for proof of live intent. Nothing enables Jarvis automatically.</div>
+  <h4>Local diagnostics</h4>
+  <p id="reportstate" class="footnote">Waiting for the Mac's first report.</p>
+  <details id="reportdetail" hidden><summary>Inspect diagnostic report</summary><pre id="reportjson" class="mono" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto"></pre></details>
+  <h4>Clips</h4>
+  <div class="list" id="list"></div>
+</section>
+
+<p class="footnote">Nothing on this page contacts any host other than this one. No analytics, no fonts from elsewhere, no sound unless you press Play.</p>
+</main>
+
+<script>
+(() => {
+'use strict';
+const $ = id => document.getElementById(id);
+const LABELS = [
+  {key: 'carl_live', text: 'carl_live', help: 'Carl, in the room, addressing Jarvis'},
+  {key: 'other_live', text: 'other_live', help: 'someone else, in the room'},
+  {key: 'carl_replay', text: 'carl_replay', help: 'a recording of Carl played from a speaker'},
+  {key: 'background', text: 'background', help: 'room with no speech'},
+  {key: 'mention', text: 'mention', help: 'Carl saying "Jarvis" without addressing it'},
+];
+const SPLITS = [{key: 'fit', text: 'fit'}, {key: 'test', text: 'test (held out)'}];
+const LABEL_KEYS = LABELS.map(l => l.key), SPLIT_KEYS = SPLITS.map(s => s.key);
+const RATE = 16000, CLIP_S = 5, PRE_S = 5, MAX_NOTE = 500, UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CLIP_T = 0.985; // |sample| at or above this counts as clipping; a hair under 1.0 catches limiter-flattened peaks
+
+// Draft prompts: agent-written for the study. Not Carl's statements.
+const PROMPTS = {
+  carl_live: [
+    'Jarvis, what is on my calendar this afternoon?',
+    'Hey Jarvis, remind me to email the DSO tomorrow at ten.',
+    'Jarvis. Pause.',
+    'Okay Jarvis, how long until the next Caltrain?',
+    'Jarvis, set a timer for twelve minutes. (say it from across the room)',
+    'Jarvis, what did I say I would do after lunch? (quieter, as if tired)',
+    'Jarvis, read me the last message I got.',
+    'Jarvis, turn the lamp off.',
+    'Jarvis... hold on... what time is it in Manila? (pause mid-sentence)',
+    'Jarvis, I am leaving now, lock up. (while walking)',
+  ],
+  mention: [
+    'I was telling Sam that Jarvis got the date wrong again.',
+    'The whole point of the Jarvis thing is that it should not answer right now.',
+    'Did you see the film scene where Jarvis talks back?',
+    'No, not Jarvis, I meant the other one.',
+    'Jarvis is the name I picked, but I might rename it.',
+    'Every time I say Jarvis in a sentence like this it should stay quiet.',
+  ],
+  other_live: [
+    'Hand the device to someone else. They read a carl_live prompt in their own voice:',
+  ],
+  carl_replay: [
+    'Play a saved recording of Carl saying a carl_live prompt from another device\'s speaker into this microphone. Do not speak. Put the playing device and distance in the note.',
+  ],
+  background: [
+    'Say nothing. Let the room be: keyboard, fridge, street, music without a voice. Use a different room or time for each clip.',
+    'Say nothing. Walk around so footsteps and rustle land in the clip.',
+    'Say nothing. Leave a tap or fan running if there is one.',
+  ],
+};
+
+// ---------------------------------------------------------------- tiny DOM helpers (textContent only)
+function el(tag, props, ...kids) {
+  const n = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') n.className = v;
+    else if (k === 'text') n.textContent = v;
+    else if (k.startsWith('aria-') || k === 'role' || k === 'for' || k === 'type' || k === 'value' || k === 'name' || k === 'id' || k === 'style' || k === 'href' || k === 'src' || k === 'preload' || k === 'controls' || k === 'title') n.setAttribute(k, v);
+    else n[k] = v;
+  }
+  for (const k of kids) if (k != null) n.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return n;
+}
+function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); return n; }
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = crypto.getRandomValues(new Uint8Array(16)); b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+const fmtDb = r => r > 0 ? (20 * Math.log10(r)).toFixed(1) + ' dBFS' : '-inf dBFS';
+const num = (x, d) => typeof x === 'number' && isFinite(x) ? x.toFixed(d) : null;
+
+// ---------------------------------------------------------------- DSP (pure; exposed on window.N1Voice for tests)
+// Windowed-sinc resampler. Anti-alias lowpass at 0.9 x the lower Nyquist, Blackman window, kernel
+// tabulated at 1/256-sample steps and normalised per output sample so DC gain is exactly 1.
+function resample(x, srcRate, dstRate) {
+  if (srcRate === dstRate) return Float32Array.from(x);
+  const ratio = srcRate / dstRate, outN = Math.floor(x.length / ratio);
+  const fc = 0.9 * Math.min(srcRate, dstRate) / 2 / srcRate;      // cycles per source sample
+  const half = Math.ceil(16 * Math.max(1, ratio));                 // kernel half width in source samples
+  const STEP = 256, tab = new Float32Array(half * STEP + 2);
+  for (let i = 0; i < tab.length; i++) {
+    const d = i / STEP, u = d / half;
+    if (u >= 1) { tab[i] = 0; continue; }
+    const w = 0.42 + 0.5 * Math.cos(Math.PI * u) + 0.08 * Math.cos(2 * Math.PI * u);
+    tab[i] = d === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * d) / (Math.PI * d) * w;
+  }
+  const y = new Float32Array(outN);
+  for (let n = 0; n < outN; n++) {
+    const t = n * ratio, c = Math.floor(t);
+    let acc = 0, wsum = 0;
+    for (let k = Math.max(0, c - half + 1), kend = Math.min(x.length - 1, c + half); k <= kend; k++) {
+      const p = Math.abs(t - k) * STEP, i = p | 0, f = p - i;
+      const h = tab[i] + (tab[i + 1] - tab[i]) * f;
+      acc += x[k] * h; wsum += h;
+    }
+    y[n] = wsum > 1e-9 ? acc / wsum : 0;
+  }
+  return y;
+}
+function toS16(f32) {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) { const v = Math.max(-1, Math.min(1, f32[i])); out[i] = v < 0 ? v * 32768 : v * 32767; }
+  return out;
+}
+function b64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function stats(f32) {
+  let sq = 0, peak = 0, clipped = 0;
+  for (let i = 0; i < f32.length; i++) { const a = Math.abs(f32[i]); sq += f32[i] * f32[i]; if (a > peak) peak = a; if (a >= CLIP_T) clipped++; }
+  return {rms: f32.length ? Math.sqrt(sq / f32.length) : 0, peak, clipped};
+}
+function minmax(f32, bins) {
+  const out = new Float32Array(bins * 2), per = f32.length / bins;
+  for (let b = 0; b < bins; b++) {
+    let lo = 1, hi = -1; const s = Math.floor(b * per), e = Math.max(s + 1, Math.floor((b + 1) * per));
+    for (let i = s; i < e && i < f32.length; i++) { const v = f32[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (lo > hi) lo = hi = 0; out[b * 2] = lo; out[b * 2 + 1] = hi;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- state
+const S = {
+  session: uuid(), stream: null, ctx: null, src: null, tap: null, sink: null, rate: 48000, running: false,
+  ring: null, ringPos: 0, ringFill: 0,                     // last PRE_S seconds at native rate, bounded
+  rec: null, recN: 0, recMode: null, recPre: null, recLabel: null, recSplit: null,  // in-flight recording
+  pending: null,                                            // finished clip awaiting Save/Discard (RAM only)
+  cols: new Float32Array(240 * 2), colPos: 0, colAcc: {lo: 1, hi: -1, n: 0}, colPer: 0,  // live scroll columns
+  meter: {rms: 0, peak: 0, clip: false}, clipHold: 0,
+  playCtx: null, playSrc: null, playStart: 0, playOffset: 0, playing: false, playhead: 0,
+  samples: [], policy: null, raf: 0, promptIdx: 0, saving: false, micEpoch: 0, guided: true,
+};
+const supported = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && (window.AudioContext || window.webkitAudioContext));
+const AC = window.AudioContext || window.webkitAudioContext;
+
+// ---------------------------------------------------------------- label / split / session UI
+function radios(host, name, items, onchange) {
+  clear(host);
+  for (const it of items) {
+    const inp = el('input', {type: 'radio', name, value: it.key});
+    inp.addEventListener('change', onchange);
+    host.append(el('label', {title: it.help || ''}, inp, el('span', {text: it.text})));
+  }
+}
+const picked = name => { const r = document.querySelector(`input[name="${name}"]:checked`); return r ? r.value : null; };
+function setPick(name, v) { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r && !r.disabled) { r.checked = true; } }
+function freeze(on) {
+  document.querySelectorAll('#labels input, #splits input').forEach(i => { i.disabled = on; });
+  $('userec').disabled = on; $('newsession').disabled = on;
+  $('frozen').hidden = !on;
+}
+function sessionText() {
+  $('sessiontext').textContent = 'session ' + S.session.slice(0, 8);
+  $('sessionpill').textContent = 'session ' + S.session.slice(0, 8);
+}
+function carlStep() {
+  const done = S.samples.filter(s => s && s.session === S.session && s.label === 'carl_live').sort((a,b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  return {done, step: Math.min(done.length, 10)};
+}
+function drawSteps() {
+  const {done, step} = carlStep(), host = clear($('steps'));
+  for (let i = 0; i < 10; i++) {
+    const s = done[i], cls = s ? (s.split === 'test' ? 'test' : 'fit') : (i === step ? 'next' : '');
+    host.append(el('i', {class: cls}));
+  }
+  const rec = step < 10 ? `next: step ${step + 1} of 10 · carl_live · ${step < 7 ? 'fit' : 'test'}` : 'ten carl_live clips saved in this session';
+  $('stepstext').textContent = rec;
+  $('userec').disabled = step >= 10 || !!S.pending || !!S.rec;
+}
+function drawPrompt() {
+  const lab = picked('label') || 'carl_live', list = PROMPTS[lab] || [], host = clear($('prompt'));
+  if (!list.length) return;
+  let idx = S.promptIdx % list.length;
+  if (lab === 'carl_live') idx = (carlStep().step + S.promptIdx) % list.length;
+  host.append(document.createTextNode(list[idx]));
+  if (lab === 'other_live') host.append(el('small', {text: PROMPTS.carl_live[(carlStep().step + S.promptIdx) % PROMPTS.carl_live.length]}));
+  host.append(el('small', {text: `draft prompt ${idx + 1} of ${list.length} for ${lab}`}));
+}
+radios($('labels'), 'label', LABELS, () => { S.guided = false; S.promptIdx = 0; drawPrompt(); });
+radios($('splits'), 'split', SPLITS, () => { S.guided = false; });
+setPick('label', 'carl_live'); setPick('split', 'fit');
+$('userec').addEventListener('click', () => { S.guided = true; const {step} = carlStep(); setPick('label', 'carl_live'); setPick('split', step < 7 ? 'fit' : 'test'); S.promptIdx = 0; drawPrompt(); live(`set carl_live · ${step < 7 ? 'fit' : 'test'} for step ${Math.min(step + 1, 10)}`); });
+$('nextprompt').addEventListener('click', () => { S.promptIdx++; drawPrompt(); });
+$('newsession').addEventListener('click', () => { S.session = uuid(); sessionText(); drawSteps(); drawPrompt(); live('new session ' + S.session.slice(0, 8)); });
+sessionText();
+
+// ---------------------------------------------------------------- microphone
+function live(msg) { $('live').textContent = msg; }
+async function listDevices() {
+  if (!supported || !navigator.mediaDevices.enumerateDevices) return;
+  let devs = [];
+  try { devs = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
+  const cur = S.stream && S.stream.getAudioTracks()[0] ? S.stream.getAudioTracks()[0].getSettings().deviceId : $('mic').value;
+  const sel = clear($('mic'));
+  sel.append(el('option', {value: '', text: 'Default microphone'}));
+  let k = 0;
+  for (const d of devs) if (d.kind === 'audioinput' && d.deviceId) {
+    k++; sel.append(el('option', {value: d.deviceId, text: d.label || `Microphone ${k}`}));
+  }
+  if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+}
+function showSettings(track) {
+  const host = clear($('settings'));
+  if (!track) return;
+  const st = track.getSettings ? track.getSettings() : {};
+  const want = {echoCancellation: false, noiseSuppression: false, autoGainControl: false};
+  const rows = [['device', track.label || '(unnamed)'], ['stream rate', st.sampleRate ? st.sampleRate + ' Hz' : 'not reported'],
+    ['context rate', S.ctx ? S.ctx.sampleRate + ' Hz' : '-'], ['channels', st.channelCount != null ? String(st.channelCount) : 'not reported'],
+    ['saved as', '16000 Hz mono s16le']];
+  for (const [k, v] of rows) host.append(el('div', null, k + ' ', el('b', {text: v})));
+  for (const k of Object.keys(want)) {
+    const got = st[k];
+    const txt = got === undefined ? 'not reported' : String(got);
+    const b = el('b', {text: txt, class: got === true ? 'bad' : got === false ? 'good' : ''});
+    host.append(el('div', null, k + ' ', b, got === true ? ' (asked off, browser kept it on)' : ''));
+  }
+}
+const WORKLET_SRC = `class P extends AudioWorkletProcessor{constructor(){super();this.buf=new Float32Array(1024);this.n=0}
+process(inputs){const inp=inputs[0];if(!inp||!inp.length)return true;const L=inp[0].length;
+for(let i=0;i<L;i++){let v=0;for(let c=0;c<inp.length;c++)v+=inp[c][i];this.buf[this.n++]=v/inp.length;
+if(this.n===this.buf.length){this.port.postMessage(this.buf,[this.buf.buffer]);this.buf=new Float32Array(1024);this.n=0}}return true}}
+registerProcessor('n1-tap',P);`;
+
+async function startMic() {
+  if (!supported || S.running || document.hidden) return;
+  const epoch = ++S.micEpoch;
+  const cancelled = () => epoch !== S.micEpoch || document.hidden;
+  $('start').disabled = true; $('stop').disabled = false;
+  live('asking for the microphone...');
+  const id = $('mic').value;
+  const audio = {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1};
+  if (id) audio.deviceId = {exact: id};
+  let stream = null, ctx = null, node = null;
+  const release = () => {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (node) { try { node.disconnect(); } catch (_) {} }
+    if (ctx && ctx.state !== 'closed') ctx.close().catch(() => {});
+  };
+  S.startRelease = release; // Stop also releases resources during AudioContext/worklet awaits
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio, video: false});
+    if (cancelled()) { release(); return; }
+    const track = stream.getAudioTracks()[0];
+    ctx = new AC();
+    if (ctx.state === 'suspended') await ctx.resume();
+    if (cancelled()) { release(); return; }
+    const src = ctx.createMediaStreamSource(stream), sink = ctx.createGain();
+    sink.gain.value = 0; sink.connect(ctx.destination);
+    if (ctx.audioWorklet) {
+      const url = URL.createObjectURL(new Blob([WORKLET_SRC], {type: 'text/javascript'}));
+      try {
+        await ctx.audioWorklet.addModule(url);
+        if (cancelled()) { release(); return; }
+        node = new AudioWorkletNode(ctx, 'n1-tap', {numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1]});
+        node.port.onmessage = ev => { if (epoch === S.micEpoch) onChunk(ev.data); };
+      } catch (_) { node = null; }
+      finally { URL.revokeObjectURL(url); }
+    }
+    if (cancelled()) { release(); return; }
+    if (!node) {
+      node = ctx.createScriptProcessor(2048, 1, 1);
+      node.onaudioprocess = ev => { if (epoch === S.micEpoch) onChunk(Float32Array.from(ev.inputBuffer.getChannelData(0))); };
+    }
+    src.connect(node); node.connect(sink);
+    S.startRelease = null;
+    Object.assign(S, {stream, ctx, src, sink, tap: node, rate: ctx.sampleRate});
+    track.addEventListener('ended', () => { if (epoch === S.micEpoch) stopMic('the microphone track ended'); });
+    S.ring = new Float32Array(Math.round(PRE_S * S.rate)); S.ringPos = 0; S.ringFill = 0;
+    S.cols.fill(0); S.colPos = 0; S.colAcc = {lo: 1, hi: -1, n: 0}; S.colPer = Math.max(1, Math.round(3 * S.rate / 240));
+    S.running = true;
+    $('stop').disabled = false; $('rec').disabled = !!S.pending; $('mic').disabled = false;
+    showSettings(track); await listDevices();
+    if (cancelled()) return;
+    live(`listening · ${S.rate} Hz · RAM buffer only until capture; nothing uploads until Save`);
+    S.raf = requestAnimationFrame(render);
+  } catch (e) {
+    release();
+    if (!cancelled()) {
+      stopMic();
+      live('microphone failed: ' + (e && e.message ? e.message : e) + '. Nothing is recording.');
+    }
+  }
+}
+function stopMic(reason) {
+  ++S.micEpoch; // cancels permission/AudioWorklet promises that resolve after Stop/pagehide
+  if (S.startRelease) { const release = S.startRelease; S.startRelease = null; release(); }
+  const wasRunning = S.running;
+  S.running = false; cancelAnimationFrame(S.raf);
+  if (S.rec) abortRecording(reason || 'microphone stopped');
+  try { if (S.tap) { S.tap.disconnect(); if (S.tap.port) S.tap.port.onmessage = null; S.tap.onaudioprocess = null; } } catch (e) {}
+  try { if (S.src) S.src.disconnect(); } catch (e) {}
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  if (S.ctx) { try { S.ctx.close(); } catch (e) {} }
+  S.tap = S.src = S.sink = S.ctx = S.stream = null; S.ring = null; S.ringFill = 0;
+  S.meter = {rms: 0, peak: 0, clip: false};
+  $('start').disabled = !supported; $('stop').disabled = true; $('rec').disabled = true; $('ctx').disabled = true;
+  $('prebuf').style.width = '0%'; $('meterbar').style.width = '0%'; $('clip').hidden = true;
+  $('rms').textContent = 'RMS - dBFS'; $('peak').textContent = 'peak -';
+  clear($('settings'));
+  if (wasRunning) live('microphone stopped' + (reason ? ' (' + reason + ')' : '') + '. All tracks released.');
+}
+$('start').addEventListener('click', startMic);
+$('stop').addEventListener('click', () => stopMic());
+$('mic').addEventListener('change', async () => { if (S.running) { stopMic('switching microphone'); await startMic(); } });
+if (supported && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', listDevices);
+
+// ---------------------------------------------------------------- per-chunk work (main thread, bounded buffers)
+function onChunk(f32) {
+  if (!S.running || !S.ring) return;
+  const st = stats(f32);
+  S.meter.rms = st.rms; S.meter.peak = st.peak;
+  if (st.clipped) S.clipHold = 20; else if (S.clipHold > 0) S.clipHold--;
+  S.meter.clip = S.clipHold > 0;
+  // ring buffer: last PRE_S seconds
+  const R = S.ring.length;
+  for (let i = 0; i < f32.length; i++) { S.ring[S.ringPos] = f32[i]; S.ringPos = (S.ringPos + 1) % R; }
+  S.ringFill = Math.min(R, S.ringFill + f32.length);
+  // live columns
+  const a = S.colAcc;
+  for (let i = 0; i < f32.length; i++) {
+    const v = f32[i]; if (v < a.lo) a.lo = v; if (v > a.hi) a.hi = v; a.n++;
+    if (a.n >= S.colPer) { S.cols[S.colPos * 2] = a.lo; S.cols[S.colPos * 2 + 1] = a.hi; S.colPos = (S.colPos + 1) % 240; a.lo = 1; a.hi = -1; a.n = 0; }
+  }
+  // recording
+  if (S.rec) {
+    const room = S.rec.length - S.recN, k = Math.min(room, f32.length);
+    S.rec.set(f32.subarray(0, k), S.recN); S.recN += k;
+    if (S.recN >= S.rec.length) finishRecording();
+  }
+}
+function ringSnapshot() {
+  const R = S.ring.length, out = new Float32Array(R);
+  out.set(S.ring.subarray(S.ringPos)); out.set(S.ring.subarray(0, S.ringPos), R - S.ringPos);
+  return out;
+}
+
+// ---------------------------------------------------------------- live render
+function render() {
+  if (!S.running) return;
+  const cv = $('wave'), g = cv.getContext('2d'), W = cv.width, H = cv.height, mid = H / 2;
+  g.fillStyle = '#0d0d0d'; g.fillRect(0, 0, W, H);
+  g.strokeStyle = '#262626'; g.beginPath(); g.moveTo(0, mid + .5); g.lineTo(W, mid + .5); g.stroke();
+  g.fillStyle = S.meter.clip ? '#ff6166' : '#52a8ff';
+  const cw = W / 240;
+  for (let i = 0; i < 240; i++) {
+    const j = (S.colPos + i) % 240, lo = S.cols[j * 2], hi = S.cols[j * 2 + 1];
+    if (lo === 0 && hi === 0) continue;
+    const y1 = mid - hi * mid, y2 = mid - lo * mid;
+    g.fillRect(i * cw, y1, Math.max(1, cw - .5), Math.max(1, y2 - y1));
+  }
+  const rmsPct = Math.max(0, Math.min(100, (20 * Math.log10(S.meter.rms || 1e-6) + 60) / 60 * 100));
+  const bar = $('meterbar'); bar.style.width = rmsPct + '%'; bar.className = S.meter.clip ? 'clip' : S.meter.peak > 0.7 ? 'hot' : '';
+  $('rms').textContent = 'RMS ' + fmtDb(S.meter.rms); $('peak').textContent = 'peak ' + S.meter.peak.toFixed(3);
+  $('clip').hidden = !S.meter.clip;
+  const fill = S.ring ? S.ringFill / S.ring.length : 0;
+  $('prebuf').style.width = (fill * 100).toFixed(0) + '%';
+  $('ctx').disabled = !S.running || fill < 1 || !!S.rec || !!S.pending;
+  if (S.rec) {
+    const left = Math.max(0, (S.rec.length - S.recN) / S.rate);
+    $('countdown').firstChild.nodeValue = left.toFixed(1);
+    $('countlabel').textContent = S.recMode === 'context' ? 'seconds after marker' : 'seconds · speak now';
+  }
+  S.raf = requestAnimationFrame(render);
+}
+
+// ---------------------------------------------------------------- recording
+function beginRecording(mode) {
+  if (!S.running || S.rec || S.pending) return;
+  const label = picked('label'), split = picked('split');
+  if (!LABEL_KEYS.includes(label) || !SPLIT_KEYS.includes(split)) { live('pick a label and a split first'); return; }
+  if (mode === 'context' && (!S.ring || S.ringFill < S.ring.length)) { live('context needs five seconds buffered first'); return; }
+  S.recLabel = label; S.recSplit = split; S.recMode = mode;
+  S.recPre = mode === 'context' ? ringSnapshot() : null;      // snapshot now; the next chunk is sample-contiguous with it
+  S.rec = new Float32Array(Math.round(CLIP_S * S.rate)); S.recN = 0;
+  freeze(true);
+  $('rec').disabled = true; $('ctx').disabled = true; $('abort').hidden = false; $('stop').disabled = true; $('mic').disabled = true;
+  $('countdown').firstChild.nodeValue = CLIP_S.toFixed(1);
+  live(mode === 'context' ? 'recording five seconds after the marker...' : 'recording five seconds. Speak now.');
+}
+function abortRecording(reason) {
+  S.rec = null; S.recN = 0; S.recPre = null; S.recMode = null;
+  if (!S.pending) freeze(false);
+  $('abort').hidden = true; $('rec').disabled = !S.running; $('stop').disabled = !S.running; $('mic').disabled = false;
+  $('countdown').firstChild.nodeValue = CLIP_S.toFixed(1); $('countlabel').textContent = 'seconds';
+  live('recording cancelled (' + reason + '). Nothing kept, nothing saved.');
+  drawSteps();
+}
+function finishRecording() {
+  const mode = S.recMode, pre = S.recPre, post = S.rec, label = S.recLabel, split = S.recSplit, rate = S.rate;
+  S.rec = null; S.recN = 0; S.recPre = null; S.recMode = null;
+  $('abort').hidden = true; $('stop').disabled = false; $('mic').disabled = false;
+  $('countdown').firstChild.nodeValue = CLIP_S.toFixed(1); $('countlabel').textContent = 'seconds';
+  let native = post;
+  if (pre) { native = new Float32Array(pre.length + post.length); native.set(pre); native.set(post, pre.length); }
+  const f16 = resample(native, rate, RATE), s16 = toS16(f16), st = stats(f16);
+  const pcm_b64 = b64(new Uint8Array(s16.buffer));
+  const track = S.stream && S.stream.getAudioTracks()[0], ts = track && track.getSettings ? track.getSettings() : {};
+  const device = [(track && track.label) || 'unknown mic', rate + 'Hz', 'ec:' + ts.echoCancellation, 'ns:' + ts.noiseSuppression, 'agc:' + ts.autoGainControl,
+    (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || ''].join(' | ').slice(0, 200);
+  S.pending = {id: uuid(), label, split, session: S.session, device, mode, f16, pcm_b64, duration_s: f16.length / RATE,
+    marker_s: pre ? pre.length / rate : null, stats: st, bins: minmax(f16, 200), error: null, saved: false};
+  S.playOffset = 0; S.playhead = 0;
+  freeze(true);
+  showPending();
+  live('clip ready: ' + S.pending.duration_s.toFixed(2) + ' s at 16 kHz. Listen, then Save or Discard. Not saved yet.');
+  $('pending').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+$('rec').addEventListener('click', () => beginRecording('clip'));
+$('ctx').addEventListener('click', () => beginRecording('context'));
+$('abort').addEventListener('click', () => abortRecording('you pressed cancel'));
+
+// ---------------------------------------------------------------- pending clip: show, play, seek
+function showPending() {
+  const p = S.pending, card = $('pending');
+  card.hidden = !p;
+  if (!p) { $('rec').disabled = !S.running; return; }
+  $('rec').disabled = true; $('ctx').disabled = true;
+  const pills = clear($('pendpills'));
+  pills.append(el('span', {class: 'pill', text: p.label}), el('span', {class: 'pill ' + (p.split === 'test' ? 'warn' : ''), text: p.split}),
+    el('span', {class: 'pill mute', text: p.mode === 'context' ? 'context · marker 5.0 s' : 'clip'}), el('span', {class: 'eyebrow', text: p.id.slice(0, 8)}));
+  const meta = clear($('clipmeta'));
+  const rows = [['duration', p.duration_s.toFixed(2) + ' s'], ['rms', fmtDb(p.stats.rms)], ['peak', p.stats.peak.toFixed(3)],
+    ['clipped samples', String(p.stats.clipped)], ['format', '16000 Hz mono s16le'], ['bytes', String(p.f16.length * 2)]];
+  for (const [k, v] of rows) meta.append(el('div', null, k + ' ', el('b', {text: v, class: k === 'clipped samples' && p.stats.clipped ? 'bad' : ''})));
+  $('tomarker').hidden = p.marker_s == null;
+  $('save').disabled = false; $('discard').disabled = false;
+  saveState(p.error ? 'NOT SAVED: ' + p.error + ' Kept in memory; retry.' : 'not saved', p.error ? 'bad' : '');
+  drawClip();
+}
+function drawClip() {
+  const p = S.pending, cv = $('clipwave'), g = cv.getContext('2d'), W = cv.width, H = cv.height, mid = H / 2;
+  g.fillStyle = '#0d0d0d'; g.fillRect(0, 0, W, H);
+  if (!p) return;
+  g.strokeStyle = '#262626'; g.beginPath(); g.moveTo(0, mid + .5); g.lineTo(W, mid + .5); g.stroke();
+  const n = p.bins.length / 2, cw = W / n;
+  g.fillStyle = '#52a8ff';
+  for (let i = 0; i < n; i++) { const lo = p.bins[i * 2], hi = p.bins[i * 2 + 1]; const y1 = mid - hi * mid, y2 = mid - lo * mid; g.fillRect(i * cw, y1, Math.max(1, cw - .5), Math.max(1, y2 - y1)); }
+  if (p.marker_s != null) {
+    const x = Math.round(p.marker_s / p.duration_s * W) + .5;
+    g.strokeStyle = '#f5a623'; g.lineWidth = 2; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); g.lineWidth = 1;
+    g.fillStyle = '#f5a623'; g.font = '11px ui-monospace, monospace'; g.fillText('marker ' + p.marker_s.toFixed(1) + 's', Math.min(x + 4, W - 80), 12);
+  }
+  const ph = Math.round(S.playhead / p.duration_s * W) + .5;
+  g.strokeStyle = '#ededed'; g.beginPath(); g.moveTo(ph, 0); g.lineTo(ph, H); g.stroke();
+}
+function seekTo(sec) {
+  const p = S.pending; if (!p) return;
+  S.playhead = Math.max(0, Math.min(p.duration_s, sec));
+  if (S.playing) { stopPlay(); startPlay(S.playhead); } else { S.playOffset = S.playhead; drawClip(); }
+}
+$('clipwave').addEventListener('pointerdown', ev => {
+  const p = S.pending; if (!p) return;
+  const r = ev.currentTarget.getBoundingClientRect(); seekTo((ev.clientX - r.left) / r.width * p.duration_s);
+});
+$('clipwave').addEventListener('keydown', ev => { if (ev.key === 'ArrowLeft') seekTo(S.playhead - 0.5); else if (ev.key === 'ArrowRight') seekTo(S.playhead + 0.5); });
+$('clipwave').tabIndex = 0;
+$('tomarker').addEventListener('click', () => { if (S.pending && S.pending.marker_s != null) seekTo(S.pending.marker_s); });
+function startPlay(offset) {
+  const p = S.pending; if (!p) return;
+  if (!S.playCtx) S.playCtx = new AC();                      // created on a user gesture (the Play button) only
+  if (S.playCtx.state === 'suspended') S.playCtx.resume();
+  const buf = S.playCtx.createBuffer(1, p.f16.length, RATE); buf.copyToChannel(p.f16, 0);
+  const src = S.playCtx.createBufferSource(); src.buffer = buf; src.connect(S.playCtx.destination);
+  src.onended = () => { if (S.playSrc === src) { S.playing = false; S.playSrc = null; S.playOffset = 0; S.playhead = 0; $('play').textContent = 'Play'; drawClip(); } };
+  S.playSrc = src; S.playOffset = offset || 0; S.playStart = S.playCtx.currentTime; S.playing = true;
+  src.start(0, S.playOffset); $('play').textContent = 'Stop playback';
+  const tick = () => { if (!S.playing) return; S.playhead = Math.min(p.duration_s, S.playOffset + S.playCtx.currentTime - S.playStart); drawClip(); requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+function stopPlay() {
+  if (S.playSrc) { const s = S.playSrc; S.playSrc = null; try { s.stop(); } catch (e) {} }
+  S.playing = false; $('play').textContent = 'Play'; drawClip();
+}
+$('play').addEventListener('click', () => { if (S.playing) stopPlay(); else startPlay(S.playOffset >= (S.pending ? S.pending.duration_s : 0) ? 0 : S.playOffset); });
+
+// ---------------------------------------------------------------- save / discard (idempotent id, retry in memory)
+function saveState(msg, cls) { const e = $('savestate'); e.textContent = msg; e.className = cls || ''; }
+async function save() {
+  const p = S.pending; if (!p || S.saving) return;
+  S.saving = true; $('save').disabled = true; $('discard').disabled = true; saveState('saving ' + (p.pcm_b64.length / 1024).toFixed(0) + ' KB...');
+  if (!p.payload) {
+    p.payload = {id: p.id, label: p.label, split: p.split, session: p.session, device: p.device, note: $('note').value.trim().slice(0, MAX_NOTE), pcm_b64: p.pcm_b64};
+    if (p.marker_s != null) p.payload.context_marker_s = p.marker_s;
+  }
+  const body = p.payload; // immutable across uncertain/lost-response retries
+  $('note').disabled = true;
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const r = await fetch('/api/voice/sample', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), credentials: 'same-origin', signal: controller.signal});
+    let doc = null; try { doc = await r.json(); } catch (e) {}
+    if (!r.ok || !doc || doc.ok !== true) {
+      const why = (doc && (doc.error || doc.detail)) ? String(doc.error || doc.detail) : '';
+      throw new Error('HTTP ' + r.status + (why ? ' ' + why : '') + (r.status === 401 || r.status === 403 ? ' (login expired or cross-site refused; reload and retry)' : ''));
+    }
+    const saved = doc.sample && typeof doc.sample === 'object' ? doc.sample : {};
+    const rec = Object.assign({id: p.id, label: p.label, split: p.split, session: p.session, note: body.note, duration_s: p.duration_s}, saved);
+    S.pending = null; S.saving = false; stopPlay();
+    freeze(false); showPending();
+    $('note').value = ''; $('note').disabled = false; $('save').textContent = 'Save to lab';
+    live('saved ' + p.id.slice(0, 8) + ' (' + p.label + ' · ' + p.split + '). Label and split are unfrozen.');
+    if (!S.samples.some(s => s && s.id === rec.id)) S.samples.unshift(rec);
+    drawStatus(); await loadStatus();
+    if (S.guided && carlStep().step < 10) setPick('split', carlStep().step < 7 ? 'fit' : 'test');
+    drawPrompt();
+    $('prompt').scrollIntoView({behavior: 'smooth', block: 'start'});
+  } catch (e) {
+    S.saving = false; p.error = (e && e.message ? e.message : String(e)) + '.';
+    $('save').disabled = false; $('discard').disabled = false; $('save').textContent = 'Retry save';
+    saveState('NOT SAVED / NOT CONFIRMED: ' + p.error + ' Kept with the same id and note; Retry is safe even if the server saved before the connection failed.', 'bad');
+  } finally { clearTimeout(timeout); }
+}
+function discard() {
+  if (!S.pending) return;
+  stopPlay(); S.pending = null; $('note').disabled = false; $('save').textContent = 'Save to lab';
+  freeze(false); showPending(); live('clip discarded. Nothing was uploaded.'); drawSteps();
+}
+$('save').addEventListener('click', save);
+$('discard').addEventListener('click', discard);
+window.addEventListener('online', loadStatus); // retries upload only on an explicit click
+
+// ---------------------------------------------------------------- status: counts, chart, list
+function sparkline(bins) {
+  const cv = el('canvas', {class: 'spark', width: 120, height: 28, 'aria-hidden': 'true'});
+  const g = cv.getContext('2d'); if (!g) return cv;
+  g.fillStyle = '#52a8ff'; const n = Math.floor(bins.length / 2), cw = 120 / n;
+  for (let i = 0; i < n; i++) { const lo = Number(bins[i * 2]) || 0, hi = Number(bins[i * 2 + 1]) || 0; const y1 = 14 - hi * 14, y2 = 14 - lo * 14; g.fillRect(i * cw, y1, Math.max(1, cw), Math.max(1, y2 - y1)); }
+  return cv;
+}
+function drawStatus() {
+  const counts = {}; let total = 0;
+  for (const l of LABEL_KEYS) counts[l] = {fit: 0, test: 0};
+  for (const s of S.samples) { if (!s || !counts[s.label]) continue; const sp = s.split === 'test' ? 'test' : 'fit'; counts[s.label][sp]++; total++; }
+  const carl = counts.carl_live, neg = counts.other_live.fit + counts.other_live.test;
+  $('counts').textContent = `${total} clip${total === 1 ? '' : 's'} saved · carl_live ${carl.fit} fit / ${carl.test} test (target 7 / 3) · other_live identity-negatives ${neg}` + (neg < carl.fit + carl.test ? ' (fewer than live-Carl clips; not identity validation)' : '');
+  const bars = clear($('bars')), mx = Math.max(1, ...LABEL_KEYS.flatMap(l => [counts[l].fit, counts[l].test]));
+  for (const l of LABEL_KEYS) {
+    bars.append(el('div', {class: 'lab', text: `${l} ${counts[l].fit}/${counts[l].test}`}));
+    const track = el('div', {class: 'track', role: 'img', 'aria-label': `${l}: ${counts[l].fit} fit, ${counts[l].test} test`});
+    track.append(el('i', {class: 'fit', style: `width:${(counts[l].fit / mx * 100).toFixed(0)}%`}), el('i', {class: 'test', style: `width:${(counts[l].test / mx * 100).toFixed(0)}%`}));
+    bars.append(track);
+  }
+  const list = clear($('list'));
+  if (!S.samples.length) list.append(el('p', {class: 'footnote', text: 'No clips saved yet.'}));
+  for (const s of S.samples.slice(0, 50)) {
+    if (!s || typeof s !== 'object') continue;
+    const left = el('div');
+    const pills = el('div', {class: 'row'});
+    pills.append(el('span', {class: 'pill', text: String(s.label || '?')}), el('span', {class: 'pill ' + (s.split === 'test' ? 'warn' : ''), text: String(s.split || '?')}));
+    if (s.session === S.session) pills.append(el('span', {class: 'pill mute', text: 'this session'}));
+    if (s.context_marker_s != null) pills.append(el('span', {class: 'pill mute', text: 'context'}));
+    left.append(pills);
+    const bits = [];
+    if (typeof s.id === 'string') bits.push(s.id.slice(0, 8));
+    if (num(s.duration_s, 2)) bits.push(num(s.duration_s, 2) + ' s');
+    if (typeof s.rms === 'number') bits.push('rms ' + (s.rms <= 1 ? fmtDb(s.rms) : s.rms.toFixed(1)));
+    if (s.clipping && typeof s.clipping.count === 'number') bits.push('clipped samples ' + s.clipping.count);
+    if (s.created_at || s.at) bits.push(String(s.created_at || s.at));
+    if (s.note) bits.push(String(s.note).slice(0, 80));
+    left.append(el('div', {class: 'meta', text: bits.join(' · ')}));
+    if (typeof s.id === 'string' && UUID_RE.test(s.id)) {
+      const a = el('audio', {controls: '', preload: 'none', src: '/api/voice/clip/' + s.id + '.wav', 'aria-label': 'saved clip ' + s.id.slice(0, 8)});
+      left.append(a);
+    }
+    const right = el('div');
+    if (s.waveform && Array.isArray(s.waveform.min) && Array.isArray(s.waveform.max)) {
+      const bins = []; for (let i = 0; i < Math.min(s.waveform.min.length, s.waveform.max.length); i++) bins.push(s.waveform.min[i], s.waveform.max[i]);
+      if (bins.length) right.append(sparkline(bins));
+    }
+    const item = el('div', {class: 'item'}); item.append(left, right); list.append(item);
+  }
+  drawSteps();
+}
+async function loadStatus() {
+  const err = $('statuserr'); err.hidden = true;
+  try {
+    const r = await fetch('/api/voice/status', {credentials: 'same-origin'});
+    let doc = null; try { doc = await r.json(); } catch (e) {}
+    if (!r.ok || !doc || doc.ok !== true) throw new Error('HTTP ' + r.status + (doc && doc.error ? ' ' + doc.error : ''));
+    S.samples = Array.isArray(doc.samples) ? doc.samples.filter(s => s && typeof s === 'object') : [];
+    S.samples.sort((a, b) => String(b.created_at || b.at || '').localeCompare(String(a.created_at || a.at || '')));
+    const report = doc.report;
+    $('reportdetail').hidden = !report;
+    $('reportjson').textContent = report ? JSON.stringify(report, null, 2) : '';
+    $('reportstate').textContent = report ? `Mac report ${report.generated_at || ''}: ${report.reference ? report.reference.count : 0} fit clips in the provisional reference. Liveness and intent remain unknown. New saves appear after the next 30-minute Mac sync.` : 'No Mac report yet; saved clips are queued for the existing 30-minute sync.';
+    const problems = [...(Array.isArray(doc.problems) ? doc.problems : []), ...(doc.report_error ? [doc.report_error] : [])];
+    if (problems.length) { err.hidden = false; err.textContent = problems.join('; '); }
+    S.policy = typeof doc.policy === 'string' ? doc.policy : null;
+    const pol = $('policy'); pol.textContent = 'policy: ' + (S.policy || 'unknown');
+    pol.className = 'pill ' + (S.policy === 'collection_only' ? 'good' : 'warn');
+  } catch (e) {
+    err.hidden = false; err.textContent = 'Could not read sample status: ' + (e && e.message ? e.message : e) + '. Counts below may be stale.';
+    const pol = $('policy'); pol.textContent = 'policy: unreachable'; pol.className = 'pill bad';
+  }
+  drawStatus();
+}
+$('refresh').addEventListener('click', loadStatus);
+
+// ---------------------------------------------------------------- lifecycle: no background capture
+function onHide() { stopMic('page hidden'); if (S.playing) stopPlay(); document.querySelectorAll('audio').forEach(a => a.pause()); }
+document.addEventListener('visibilitychange', () => { if (document.hidden) onHide(); else if (!document.hidden) loadStatus(); });
+window.addEventListener('pagehide', onHide);
+window.addEventListener('beforeunload', ev => { if (S.pending && !S.pending.saved) { ev.preventDefault(); ev.returnValue = ''; } });
+
+// ---------------------------------------------------------------- boot
+if (!supported) { $('unsupported').hidden = false; $('start').disabled = true; }
+drawSteps(); drawPrompt(); showPending(); listDevices(); loadStatus();
+setInterval(() => { if (!document.hidden) loadStatus(); }, 30000);
+
+window.N1Voice = {resample, toS16, b64, stats, minmax, RATE,
+  state: () => ({session: S.session, running: S.running, rate: S.rate, ringFill: S.ring ? S.ringFill / S.ring.length : 0, recording: !!S.rec, saving: S.saving,
+    pending: S.pending ? {id: S.pending.id, label: S.pending.label, split: S.pending.split, duration_s: S.pending.duration_s, marker_s: S.pending.marker_s, error: S.pending.error, bytes: S.pending.f16.length * 2} : null,
+    tracks: S.stream ? S.stream.getTracks().map(t => t.readyState) : [], ctxState: S.ctx ? S.ctx.state : null, samples: S.samples.length, policy: S.policy})};
+})();
+</script>
+</body>
+</html>

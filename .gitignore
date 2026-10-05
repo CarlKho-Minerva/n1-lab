@@ -1,4 +1,6 @@
 private/
+# Defence in depth: even an unconfigured local dev server must not commit voices.
+sample_data/voice/
 __pycache__/
 *.pyc
 .DS_Store
