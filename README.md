@@ -21,6 +21,17 @@ clip. The next sentence appears only after Save. No labels, split choices, chart
 compete with the current action. Settings & data opens the original advanced controls, including
 manual context capture (five seconds before and after a marker). Audio stays in browser RAM until
 Save. Stop/page-hide cancels active capture and outstanding microphone setup.
+
+A link with `?study=full&mic=rode&batch=<UUID>` appends a separate, reload-resumable study:
+10 new Carl clips (7 fit, 3 exploratory test), then 3 other-live, 3 background and 3 mention
+test clips. Each stage has its own deterministic session ID within that batch. The other-person
+stage requires an explicit permission/handoff acknowledgement; mention returns the mic to Carl.
+The RØDE input name is visible, `default`/`communications` aliases are excluded, capture requests
+the exact device ID, and a mismatched device is rejected. “Find RØDE” may briefly request mic
+permission to reveal device labels, but never creates a clip and always releases that stream.
+A new batch does not alter earlier saved samples. Completion means collection only, not validated
+voice activation; replay/liveness and intent recognition remain unproven. The local evaluator
+builds a fit-only speaker reference, not new neural model weights.
 Labels/splits are frozen before capture; the upload payload stays identical across manual retries.
 The guided sequence selects seven `carl_live` fit clips, then three test clips. Same-session tests
 are **exploratory**; collect separate-session live-other examples and later live-Carl tests too.

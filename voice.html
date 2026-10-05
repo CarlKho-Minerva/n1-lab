@@ -104,6 +104,8 @@ main:has(#advanced[hidden]){padding-bottom:24px}
   <canvas id="guidewave" width="720" height="110" role="img" aria-label="Recording waveform" hidden></canvas>
   <p id="guideStatus" role="status" aria-live="polite"></p>
   <div id="guideActions">
+    <button class="btn" id="guideConnect" type="button" hidden>Find RØDE</button>
+    <button class="btn" id="guideReady" type="button" hidden>Ready</button>
     <button class="btn" id="guideRecord" type="button">Record</button>
     <button class="btn ghost" id="guideCancel" type="button" hidden>Cancel</button>
     <div id="guideReview" hidden>
@@ -112,6 +114,7 @@ main:has(#advanced[hidden]){padding-bottom:24px}
       <button class="btn" id="guideSave" type="button">Save &amp; next</button>
     </div>
   </div>
+  <p id="guideMic" class="footnote" hidden></p>
   <p id="guideConsent">Practice line, not a real command. Only Save uploads audio to your private N1 lab.</p>
 </section>
 <div id="advanced" hidden>
@@ -245,6 +248,9 @@ const LABELS = [
 const SPLITS = [{key: 'fit', text: 'fit'}, {key: 'test', text: 'test (held out)'}];
 const LABEL_KEYS = LABELS.map(l => l.key), SPLIT_KEYS = SPLITS.map(s => s.key);
 const RATE = 16000, CLIP_S = 5, PRE_S = 5, MAX_NOTE = 500, UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PARAMS = new URLSearchParams(location.search), FULL_STUDY = PARAMS.get('study') === 'full', REQUIRE_RODE = PARAMS.get('mic') === 'rode';
+const RUN_ID = UUID_RE.test(PARAMS.get('batch') || '') ? PARAMS.get('batch').toLowerCase() : uuid();
+const isRode = text => /rode|wireless (micro|go|pro)|nt-usb|podmic/i.test(text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ø/gi, 'o'));
 const CLIP_T = 0.985; // |sample| at or above this counts as clipping; a hair under 1.0 catches limiter-flattened peaks
 
 // Draft prompts: agent-written for the study. Not Carl's statements.
@@ -359,7 +365,7 @@ function minmax(f32, bins) {
 
 // ---------------------------------------------------------------- state
 const S = {
-  session: uuid(), stream: null, ctx: null, src: null, tap: null, sink: null, rate: 48000, running: false,
+  session: RUN_ID, statusLoaded: false, probeStream: null, stream: null, ctx: null, src: null, tap: null, sink: null, rate: 48000, running: false,
   ring: null, ringPos: 0, ringFill: 0,                     // last PRE_S seconds at native rate, bounded
   rec: null, recN: 0, recMode: null, recPre: null, recLabel: null, recSplit: null,  // in-flight recording
   pending: null,                                            // finished clip awaiting Save/Discard (RAM only)
@@ -436,7 +442,12 @@ async function listDevices() {
     k++; sel.append(el('option', {value: d.deviceId, text: d.label || `Microphone ${k}`}));
   }
   if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  if (REQUIRE_RODE) {
+    const rode = [...sel.options].find(o => o.value && !['default', 'communications'].includes(o.value) && isRode(o.textContent));
+    sel.value = rode ? rode.value : '';
+  }
 }
+if (navigator.mediaDevices) navigator.mediaDevices.addEventListener('devicechange', () => listDevices());
 function showSettings(track) {
   const host = clear($('settings'));
   if (!track) return;
@@ -465,6 +476,14 @@ async function startMic() {
   const cancelled = () => epoch !== S.micEpoch || document.hidden;
   $('start').disabled = true; $('stop').disabled = false;
   live('asking for the microphone...');
+  if (REQUIRE_RODE) {
+    await listDevices();
+    if (cancelled()) return;
+    if (!$('mic').value || !isRode($('mic').selectedOptions[0].textContent)) {
+      $('start').disabled = false; $('stop').disabled = true;
+      live('RØDE input not found. Connect it, then try again. No fallback microphone used.'); return;
+    }
+  }
   const id = $('mic').value;
   const audio = {echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1};
   if (id) audio.deviceId = {exact: id};
@@ -479,6 +498,7 @@ async function startMic() {
     stream = await navigator.mediaDevices.getUserMedia({audio, video: false});
     if (cancelled()) { release(); return; }
     const track = stream.getAudioTracks()[0];
+    if (REQUIRE_RODE && track.getSettings().deviceId !== id) throw new Error('RØDE device mismatch; recording refused');
     ctx = new AC();
     if (ctx.state === 'suspended') await ctx.resume();
     if (cancelled()) { release(); return; }
@@ -520,6 +540,7 @@ async function startMic() {
   }
 }
 function stopMic(reason) {
+  if (S.probeStream) { S.probeStream.getTracks().forEach(t => t.stop()); S.probeStream = null; }
   ++S.micEpoch; // cancels permission/AudioWorklet promises that resolve after Stop/pagehide
   if (S.startRelease) { const release = S.startRelease; S.startRelease = null; release(); }
   const wasRunning = S.running;
@@ -815,6 +836,7 @@ async function loadStatus() {
     const r = await fetch('/api/voice/status', {credentials: 'same-origin'});
     let doc = null; try { doc = await r.json(); } catch (e) {}
     if (!r.ok || !doc || doc.ok !== true) throw new Error('HTTP ' + r.status + (doc && doc.error ? ' ' + doc.error : ''));
+    S.statusLoaded = true;
     S.samples = Array.isArray(doc.samples) ? doc.samples.filter(s => s && typeof s === 'object') : [];
     S.samples.sort((a, b) => String(b.created_at || b.at || '').localeCompare(String(a.created_at || a.at || '')));
     const report = doc.report;
@@ -827,6 +849,7 @@ async function loadStatus() {
     const pol = $('policy'); pol.textContent = 'policy: ' + (S.policy || 'unknown');
     pol.className = 'pill ' + (S.policy === 'collection_only' ? 'good' : 'warn');
   } catch (e) {
+    S.statusLoaded = false;
     err.hidden = false; err.textContent = 'Could not read sample status: ' + (e && e.message ? e.message : e) + '. Counts below may be stale.';
     const pol = $('policy'); pol.textContent = 'policy: unreachable'; pol.className = 'pill bad';
   }
@@ -842,34 +865,77 @@ window.addEventListener('beforeunload', ev => { if (S.pending && !S.pending.save
 
 // ---------------------------------------------------------------- one-screen guided flow; reuses the tested recorder and save path
 let guideStarting = false, guideRequest = 0, guideError = '';
+const acceptedPhases = new Set([0]);
+const PHASES = [
+  {label:'carl_live', total:10, title:'Your RØDE voice', prompt:PROMPTS.carl_live},
+  {label:'other_live', total:3, title:'Another person', intro:'Hand the mic to someone else. Record only with their permission.', ready:'They agree and are ready', prompt:PROMPTS.carl_live},
+  {label:'background', total:3, title:'Background', intro:'No one speaks for these next three clips.', ready:'Ready for quiet', prompt:['Stay quiet. Let the room sound normal.', 'Stay quiet. Type on your keyboard.', 'Stay quiet. Walk a few steps.']},
+  {label:'mention', total:3, title:'You, mentioning Jarvis', intro:'Now you, Carl. Talk about Jarvis—not to it.', ready:'I’m ready', prompt:PROMPTS.mention},
+].slice(0, FULL_STUDY ? 4 : 1);
+function phaseSession(index) { return RUN_ID.slice(0, -1) + (parseInt(RUN_ID.slice(-1), 16) ^ index).toString(16); }
+function guidePhase() {
+  for (let index = 0; index < PHASES.length; index++) {
+    const phase = PHASES[index], session = phaseSession(index);
+    const step = S.samples.filter(s => s.session === session && s.label === phase.label && (!S.pending || s.id !== S.pending.id)).length;
+    if ((S.pending && S.pending.session === session) || step < phase.total) return {...phase, index, session, step};
+  }
+  return null;
+}
+function rodeReady() { return !REQUIRE_RODE || (!!$('mic').value && isRode($('mic').selectedOptions[0].textContent)); }
 const guideText = (id, value) => { if ($(id).textContent !== value) $(id).textContent = value; };
 function syncGuide() {
   if (!$('advanced').hidden) return;
-  const step = carlStep().step, pending = S.pending, recording = !!S.rec;
-  const busy = guideStarting || recording, complete = step >= 10 && !pending;
-  guideText('guideProgress', complete ? 'All done' : `Clip ${Math.min(step + 1, 10)} of 10`);
-  guideText('guideHint', complete ? 'Thank you.' : pending ? 'Listen, then keep it or try again.' : recording ? 'Say it now:' : guideStarting ? 'Allow microphone access if asked.' : 'Press Record, then say:');
-  guideText('guidePrompt', complete ? '10 clips saved. You’re done.' : pending ? 'How did that sound?' : PROMPTS.carl_live[step % 10]);
+  const phase = guidePhase(), pending = S.pending, recording = !!S.rec;
+  const busy = guideStarting || recording, complete = !phase && !pending;
+  const intro = phase && !acceptedPhases.has(phase.index) && !pending && !busy;
+  const needMic = !rodeReady() && !pending && !busy && !complete;
+  guideText('guideProgress', complete ? 'This batch is saved' : FULL_STUDY ? `${phase.title} · ${Math.min(phase.step + 1, phase.total)} / ${phase.total}` : `Clip ${Math.min(phase.step + 1, phase.total)} of ${phase.total}`);
+  guideText('guideHint', complete ? 'Collection is not validation.' : pending ? 'Listen, then keep it or try again.' : needMic ? 'First, confirm the microphone.' : intro ? 'Next step' : recording ? (phase.label === 'background' ? 'Keep quiet:' : 'Say it now:') : guideStarting ? 'Allow microphone access if asked.' : phase.label === 'background' ? 'Press Record, then:' : phase.label === 'other_live' ? 'The other person presses Record, then says:' : phase.label === 'mention' ? 'Press Record. Talk about Jarvis, not to it:' : 'Press Record, then say:');
+  guideText('guidePrompt', complete ? (FULL_STUDY ? '19 new clips saved.' : 'Your 10 voice clips are saved.') : pending ? 'How did that sound?' : needMic ? 'Connect your RØDE microphone.' : intro ? phase.intro : phase.prompt[phase.step % phase.prompt.length]);
   const failure = pending && pending.error ? 'Save not confirmed. Your clip is still here—retry safely.' : guideError;
-  const message = !supported ? 'Open this page in Safari or Chrome over HTTPS.' : S.saving ? 'Saving…' : failure || (recording ? `Recording · ${Math.max(1, Math.ceil(CLIP_S - S.recN / S.rate))} s` : guideStarting ? 'Starting microphone…' : pending ? 'Microphone off · not saved yet' : complete ? 'Microphone off. Voice activation stays off.' : '');
+  const message = !supported ? 'Open this page in Safari or Chrome over HTTPS.' : !S.statusLoaded ? 'Loading saved clips… If this persists, reload the page.' : S.saving ? 'Saving…' : failure || (recording ? `Recording · ${Math.max(1, Math.ceil(CLIP_S - S.recN / S.rate))} s` : guideStarting ? 'Checking microphone…' : pending ? 'Microphone off · not saved yet' : complete ? (FULL_STUDY ? 'Local evaluation is next. Replay safety is still untested. Voice activation stays off.' : 'Other-speaker, background and mention checks are still needed. Voice activation stays off.') : '');
   guideText('guideStatus', message); $('guideStatus').classList.toggle('bad', !!failure || !supported);
-  $('guideRecord').hidden = busy || !!pending || complete;
-  $('guideRecord').disabled = !supported;
+  $('guideRecord').hidden = busy || !!pending || complete || !!intro || needMic;
+  $('guideRecord').disabled = !supported || !S.statusLoaded;
+  $('guideConnect').hidden = !needMic; $('guideConnect').disabled = !supported || !S.statusLoaded;
+  $('guideReady').hidden = !intro || needMic; $('guideReady').disabled = !S.statusLoaded;
+  if (intro) guideText('guideReady', phase.ready);
   $('guideCancel').hidden = !busy;
   $('guideReview').hidden = !pending;
   $('guideListen').disabled = S.saving; $('guideRedo').disabled = S.saving; $('guideSave').disabled = S.saving;
   guideText('guideListen', S.playing ? 'Stop playback' : 'Listen');
-  guideText('guideSave', S.saving ? 'Saving…' : pending && pending.error ? 'Retry save' : step === 9 ? 'Save & finish' : 'Save & next');
+  guideText('guideSave', S.saving ? 'Saving…' : pending && pending.error ? 'Retry save' : phase && phase.index === PHASES.length - 1 && phase.step === phase.total - 1 ? 'Save batch' : 'Save & next');
   $('guidewave').hidden = !(recording || pending);
   if (recording || pending) $('guidewave').getContext('2d').drawImage($(pending ? 'clipwave' : 'wave'), 0, 0, 720, 110);
+  $('guideMic').hidden = !REQUIRE_RODE;
+  guideText('guideMic', rodeReady() ? 'Input: ' + $('mic').selectedOptions[0].textContent : 'RØDE required · laptop mic will not be used for clips');
   $('advancedToggle').disabled = busy || !!pending || S.saving;
 }
+$('guideReady').addEventListener('click', () => { const phase = guidePhase(); if (phase) acceptedPhases.add(phase.index); guideError = ''; syncGuide(); });
+$('guideConnect').addEventListener('click', async () => {
+  if (guideStarting || document.hidden) return;
+  const request = ++guideRequest; let probe = null;
+  guideStarting = true; guideError = ''; syncGuide();
+  try {
+    // Permission probe only: never creates a clip, and is stopped before recording is possible.
+    probe = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
+    if (request !== guideRequest || document.hidden) return;
+    S.probeStream = probe; await listDevices();
+    if (request === guideRequest && !rodeReady()) guideError = 'RØDE not found. Check the USB connection, then try again.';
+  } catch (e) { if (request === guideRequest) guideError = 'Microphone access failed: ' + e.message; }
+  finally {
+    if (probe) probe.getTracks().forEach(t => t.stop());
+    if (S.probeStream === probe) S.probeStream = null;
+    if (request === guideRequest) { guideStarting = false; syncGuide(); }
+  }
+});
 $('guideRecord').addEventListener('click', async () => {
-  if (guideStarting || S.rec || S.pending || carlStep().step >= 10) return;
+  const phase = guidePhase();
+  if (guideStarting || S.rec || S.pending || !phase || !S.statusLoaded || !rodeReady() || !acceptedPhases.has(phase.index)) return;
   const request = ++guideRequest;
   guideError = ''; guideStarting = true; syncGuide();
-  S.guided = true; S.promptIdx = 0;
-  setPick('label', 'carl_live'); setPick('split', carlStep().step < 7 ? 'fit' : 'test');
+  S.session = phase.session; sessionText(); S.guided = false; S.promptIdx = 0;
+  setPick('label', phase.label); setPick('split', phase.index === 0 && phase.step < 7 ? 'fit' : 'test');
   $('note').value = ''; drawPrompt();
   try {
     if (!S.running) await startMic();
