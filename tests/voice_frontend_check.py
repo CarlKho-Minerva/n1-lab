@@ -73,6 +73,7 @@ def main():
         page.on("request", on_request)
 
         page.goto(BASE + "/voice")
+        page.click('#advancedToggle')
         check("page loads with policy pill from /api/voice/status",
               wait_for(page, "document.getElementById('policy').textContent==='policy: collection_only'"))
         check("supported browser: unsupported banner hidden", page.evaluate("document.getElementById('unsupported').hidden"))
@@ -192,6 +193,7 @@ def main():
         # ---- reload gives a fresh session
         page.evaluate("Object.defineProperty(document,'hidden',{get:()=>false,configurable:true})")
         page.reload()
+        page.click('#advancedToggle')
         wait_for(page, "document.getElementById('policy').textContent==='policy: collection_only'")
         check("fresh page gets a fresh session uuid", page.evaluate("N1Voice.state().session") not in (s1,))
         check("saved samples from before still listed (2)", wait_for(page, "document.querySelectorAll('#list .item').length===2", 4))

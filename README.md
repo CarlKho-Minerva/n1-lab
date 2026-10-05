@@ -15,9 +15,12 @@ Do not add anything to `public_paths` beyond `/healthz`: the app has a write end
 
 ## Private voice lab
 
-`/voice` records explicitly labelled samples. Start the microphone, capture five seconds (or a
-manual marker with five seconds before and after), replay, then Save or Discard. Audio stays in
-browser RAM until Save. Stop/page-hide cancels active capture and outstanding microphone setup.
+`/voice` opens a one-screen guided recorder: one drafted sentence and Record, then Listen /
+Save & next / Redo. Record starts the microphone; it stops automatically after each five-second
+clip. The next sentence appears only after Save. No labels, split choices, charts or instructions
+compete with the current action. Settings & data opens the original advanced controls, including
+manual context capture (five seconds before and after a marker). Audio stays in browser RAM until
+Save. Stop/page-hide cancels active capture and outstanding microphone setup.
 Labels/splits are frozen before capture; the upload payload stays identical across manual retries.
 The guided sequence selects seven `carl_live` fit clips, then three test clips. Same-session tests
 are **exploratory**; collect separate-session live-other examples and later live-Carl tests too.
@@ -46,8 +49,9 @@ python3 -m unittest discover -s tests -p test_voice_sync.py -v
 /Users/carl/.local/venvs/carl-spk/bin/python -m unittest discover -s ../hey/tests -v
 ```
 
-The real-backend browser regression covers a lost upload response followed by idempotent retry,
-and a permission prompt resolving after page-hide. The separate 65-check fake-microphone browser
+The real-backend browser regressions cover the one-screen sequence at 320/375/390px phone widths
+and desktop size, save-to-next, redo-without-advancing, microphone shutdown after capture, a lost
+upload response followed by idempotent retry, and permission resolving after page-hide. The separate 65-check fake-microphone browser
 suite covers waveform DSP, context capture, consent, label freeze, playback/discard, mobile width,
 explicit-save upload, and error states. Final external `vet-hc` review was attempted but blocked by
 the account's weekly limit; passing executable tests are not a substitute for that review.
