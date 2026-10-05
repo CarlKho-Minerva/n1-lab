@@ -84,13 +84,37 @@ audio{width:100%;max-width:320px;height:36px;margin-top:6px;filter:invert(.9) hu
 .stack .btn{flex:0 0 auto}
 @media (min-width:520px){.stack{flex-direction:row;flex-wrap:wrap}.stack .btn{flex:1 1 160px}}
 .footnote{font-size:13px;line-height:20px;color:var(--mute)}
+#guide{min-height:calc(100svh - 120px);display:flex;flex-direction:column;justify-content:center;gap:18px;max-width:520px;margin:auto}
+#guide h1{font-size:clamp(24px,6vw,34px);line-height:1.25;letter-spacing:-.7px;margin:0}
+#guide p{margin:0}#guidewave{height:60px}#guide .btn{min-height:48px}
+#guideActions{display:grid;gap:10px}#guideReview{display:grid;grid-template-columns:1fr 1fr;gap:10px}#guideSave{grid-column:1/-1}
+#guideStatus{min-height:24px;color:var(--ok)}#guideStatus.bad{color:var(--bad)}
+#guideConsent{font-size:12px;line-height:18px;color:var(--mute)}
+main:has(#advanced[hidden]){padding-bottom:24px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
 <main>
-<nav><a href="/">Lab</a><span class="eyebrow">voice · collection only</span></nav>
-
+<nav><a href="/">Lab</a><button class="btn ghost" id="advancedToggle" type="button" aria-expanded="false" aria-controls="advanced" style="padding:6px 12px;min-height:36px">Settings &amp; data</button></nav>
+<section id="guide" aria-label="Guided voice recording">
+  <div class="eyebrow" id="guideProgress">Clip 1 of 10</div>
+  <p id="guideHint">Press Record, then say:</p>
+  <h1 id="guidePrompt"></h1>
+  <canvas id="guidewave" width="720" height="110" role="img" aria-label="Recording waveform" hidden></canvas>
+  <p id="guideStatus" role="status" aria-live="polite"></p>
+  <div id="guideActions">
+    <button class="btn" id="guideRecord" type="button">Record</button>
+    <button class="btn ghost" id="guideCancel" type="button" hidden>Cancel</button>
+    <div id="guideReview" hidden>
+      <button class="btn ghost" id="guideListen" type="button">Listen</button>
+      <button class="btn ghost" id="guideRedo" type="button">Redo</button>
+      <button class="btn" id="guideSave" type="button">Save &amp; next</button>
+    </div>
+  </div>
+  <p id="guideConsent">Practice line, not a real command. Only Save uploads audio to your private N1 lab.</p>
+</section>
+<div id="advanced" hidden>
 <div class="row"><span class="pill mute" id="policy">policy: loading</span><span class="eyebrow" id="sessionpill">session …</span></div>
 <h1>Does it hear me?</h1>
 <p>Ten hand-labelled clips of me addressing Jarvis, plus negatives, so a later test can ask two things:
@@ -204,6 +228,7 @@ five seconds before the button as well.</p>
 </section>
 
 <p class="footnote">Nothing on this page contacts any host other than this one. No analytics, no fonts from elsewhere, no sound unless you press Play.</p>
+</div>
 </main>
 
 <script>
@@ -226,15 +251,15 @@ const CLIP_T = 0.985; // |sample| at or above this counts as clipping; a hair un
 const PROMPTS = {
   carl_live: [
     'Jarvis, what is on my calendar this afternoon?',
-    'Hey Jarvis, remind me to email the DSO tomorrow at ten.',
-    'Jarvis. Pause.',
+    'Hey Jarvis, what will the weather be like tomorrow?',
+    'Jarvis, set a timer for five minutes, please.',
     'Okay Jarvis, how long until the next Caltrain?',
-    'Jarvis, set a timer for twelve minutes. (say it from across the room)',
-    'Jarvis, what did I say I would do after lunch? (quieter, as if tired)',
+    'Jarvis, set a timer for twelve minutes, please.',
+    'Jarvis, what did I say I would do after lunch?',
     'Jarvis, read me the last message I got.',
     'Jarvis, turn the lamp off.',
-    'Jarvis... hold on... what time is it in Manila? (pause mid-sentence)',
-    'Jarvis, I am leaving now, lock up. (while walking)',
+    'Jarvis, what time is it in Manila right now?',
+    'Jarvis, remind me to bring a jacket when I leave.',
   ],
   mention: [
     'I was telling Sam that Jarvis got the date wrong again.',
@@ -616,7 +641,8 @@ function finishRecording() {
   freeze(true);
   showPending();
   live('clip ready: ' + S.pending.duration_s.toFixed(2) + ' s at 16 kHz. Listen, then Save or Discard. Not saved yet.');
-  $('pending').scrollIntoView({behavior: 'smooth', block: 'start'});
+  if ($('advanced').hidden) stopMic('clip ready');
+  else $('pending').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 $('rec').addEventListener('click', () => beginRecording('clip'));
 $('ctx').addEventListener('click', () => beginRecording('context'));
@@ -809,14 +835,68 @@ async function loadStatus() {
 $('refresh').addEventListener('click', loadStatus);
 
 // ---------------------------------------------------------------- lifecycle: no background capture
-function onHide() { stopMic('page hidden'); if (S.playing) stopPlay(); document.querySelectorAll('audio').forEach(a => a.pause()); }
+function onHide() { ++guideRequest; guideStarting = false; stopMic('page hidden'); if (S.playing) stopPlay(); document.querySelectorAll('audio').forEach(a => a.pause()); }
 document.addEventListener('visibilitychange', () => { if (document.hidden) onHide(); else if (!document.hidden) loadStatus(); });
 window.addEventListener('pagehide', onHide);
 window.addEventListener('beforeunload', ev => { if (S.pending && !S.pending.saved) { ev.preventDefault(); ev.returnValue = ''; } });
 
+// ---------------------------------------------------------------- one-screen guided flow; reuses the tested recorder and save path
+let guideStarting = false, guideRequest = 0, guideError = '';
+const guideText = (id, value) => { if ($(id).textContent !== value) $(id).textContent = value; };
+function syncGuide() {
+  if (!$('advanced').hidden) return;
+  const step = carlStep().step, pending = S.pending, recording = !!S.rec;
+  const busy = guideStarting || recording, complete = step >= 10 && !pending;
+  guideText('guideProgress', complete ? 'All done' : `Clip ${Math.min(step + 1, 10)} of 10`);
+  guideText('guideHint', complete ? 'Thank you.' : pending ? 'Listen, then keep it or try again.' : recording ? 'Say it now:' : guideStarting ? 'Allow microphone access if asked.' : 'Press Record, then say:');
+  guideText('guidePrompt', complete ? '10 clips saved. You’re done.' : pending ? 'How did that sound?' : PROMPTS.carl_live[step % 10]);
+  const failure = pending && pending.error ? 'Save not confirmed. Your clip is still here—retry safely.' : guideError;
+  const message = !supported ? 'Open this page in Safari or Chrome over HTTPS.' : S.saving ? 'Saving…' : failure || (recording ? `Recording · ${Math.max(1, Math.ceil(CLIP_S - S.recN / S.rate))} s` : guideStarting ? 'Starting microphone…' : pending ? 'Microphone off · not saved yet' : complete ? 'Microphone off. Voice activation stays off.' : '');
+  guideText('guideStatus', message); $('guideStatus').classList.toggle('bad', !!failure || !supported);
+  $('guideRecord').hidden = busy || !!pending || complete;
+  $('guideRecord').disabled = !supported;
+  $('guideCancel').hidden = !busy;
+  $('guideReview').hidden = !pending;
+  $('guideListen').disabled = S.saving; $('guideRedo').disabled = S.saving; $('guideSave').disabled = S.saving;
+  guideText('guideListen', S.playing ? 'Stop playback' : 'Listen');
+  guideText('guideSave', S.saving ? 'Saving…' : pending && pending.error ? 'Retry save' : step === 9 ? 'Save & finish' : 'Save & next');
+  $('guidewave').hidden = !(recording || pending);
+  if (recording || pending) $('guidewave').getContext('2d').drawImage($(pending ? 'clipwave' : 'wave'), 0, 0, 720, 110);
+  $('advancedToggle').disabled = busy || !!pending || S.saving;
+}
+$('guideRecord').addEventListener('click', async () => {
+  if (guideStarting || S.rec || S.pending || carlStep().step >= 10) return;
+  const request = ++guideRequest;
+  guideError = ''; guideStarting = true; syncGuide();
+  S.guided = true; S.promptIdx = 0;
+  setPick('label', 'carl_live'); setPick('split', carlStep().step < 7 ? 'fit' : 'test');
+  $('note').value = ''; drawPrompt();
+  try {
+    if (!S.running) await startMic();
+    if (request !== guideRequest || document.hidden) return;
+    if (S.running) beginRecording('clip');
+    else guideError = $('live').textContent || 'Microphone unavailable. Try again.';
+  } catch (e) { if (request === guideRequest) { stopMic(); guideError = 'Microphone failed: ' + e.message; } }
+  finally { if (request === guideRequest) { guideStarting = false; syncGuide(); } }
+});
+$('guideCancel').addEventListener('click', () => { ++guideRequest; guideStarting = false; guideError = ''; stopMic('cancelled'); syncGuide(); });
+$('guideListen').addEventListener('click', () => { $('play').click(); syncGuide(); });
+$('guideRedo').addEventListener('click', () => { discard(); guideError = ''; syncGuide(); });
+$('guideSave').addEventListener('click', async () => { await save(); syncGuide(); });
+$('advancedToggle').addEventListener('click', () => {
+  if (S.rec || S.pending || S.saving || guideStarting) return;
+  stopMic();
+  const advanced = $('advanced').hidden;
+  $('advanced').hidden = !advanced; $('guide').hidden = advanced;
+  $('advancedToggle').setAttribute('aria-expanded', String(advanced));
+  $('advancedToggle').textContent = advanced ? 'Back to recording' : 'Settings & data';
+  syncGuide(); window.scrollTo(0, 0);
+});
+setInterval(() => { if (!document.hidden) syncGuide(); }, 120);
+
 // ---------------------------------------------------------------- boot
 if (!supported) { $('unsupported').hidden = false; $('start').disabled = true; }
-drawSteps(); drawPrompt(); showPending(); listDevices(); loadStatus();
+drawSteps(); drawPrompt(); showPending(); listDevices(); loadStatus(); syncGuide();
 setInterval(() => { if (!document.hidden) loadStatus(); }, 30000);
 
 window.N1Voice = {resample, toS16, b64, stats, minmax, RATE,
