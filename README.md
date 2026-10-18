@@ -13,6 +13,22 @@ data directory and are copied in over `oh app ssh` (see `tools/push.sh`); they a
 
 Do not add anything to `public_paths` beyond `/healthz`: the app has a write endpoint.
 
+## Reading log
+
+Every file page (`/files/*.html`, `/files/*.md`) and experiment page (`/x/<slug>`) carries a small script that
+measures, in the browser that is showing it: seconds visible, seconds active (a touch, scroll or key in the last
+60 s), the deepest point reached, and which of 100 equal bands of the document were in the viewport for how many
+seconds. Viewport width, height and pixel ratio are the real ones (an iPhone reports its own), so nothing about the
+screen is assumed. Checkpoints go to `POST /api/read` every 30 s and when the page is hidden; each is cumulative per
+view and the highest `seq` wins. Same-origin only, validated, append-only `reads/views.jsonl` in the app data dir,
+fsynced; a failed write is a 500 and the page shows `reading log NOT SAVING` after two failures.
+
+`/reads` lists files with no visit logged and the 60 most recent sessions; experiment pages show a line and a
+coverage bar under each file. `tools/push.sh pull` (and so the 30-minute Mac job) brings the log home to
+`private/reads/`. On screen is not the same as read. Nothing was logged before 2026-10-17.
+
+    python3 -m unittest discover -s tests -p test_reads.py -v
+
 ## Private voice lab
 
 `/voice` opens a one-screen guided recorder: one drafted sentence and Record, then Listen /

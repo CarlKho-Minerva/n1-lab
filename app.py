@@ -11,6 +11,7 @@ Content lives OUTSIDE this repo, in the app's data dir, and is re-read on every 
     $OPENHOST_APP_DATA_DIR/tasks/<slug>.json    review tasks
     $OPENHOST_APP_DATA_DIR/files/*              attachments (rendered notebooks, write-ups)
     $OPENHOST_APP_DATA_DIR/responses/<slug>.jsonl   Carl's answers, appended by POST, pulled home by the Mac
+    $OPENHOST_APP_DATA_DIR/reads/views.jsonl        reading log: time on screen and scroll coverage per page view
     $OPENHOST_APP_DATA_DIR/voice/samples/<uuid>.{wav,json}   explicitly labelled voice samples (voice_store.py);
                                                 collection only, nothing here trains or verifies
 Copy content in with `oh app ssh` (tools/push.sh). The repo holds code and sample data only.
@@ -82,6 +83,125 @@ def answers(slug):
     except FileNotFoundError:
         pass
     return out
+
+
+# ---------------------------------------------------------------- reading log
+# Every view of a file or an experiment page reports, from the browser itself, how long it was on screen and
+# which part of the document was in the viewport for how many seconds (100 bands of 1% each). The phone's real
+# viewport is measured, not assumed. Checkpoints are cumulative per view, so the highest seq wins.
+#     $OPENHOST_APP_DATA_DIR/reads/views.jsonl    one line per checkpoint, append-only, pulled home by the Mac
+READ_PATH_RE = re.compile(r"^/(files/[A-Za-z0-9_.-]{1,120}|x/[A-Za-z0-9_-]{1,64})$")
+VIEW_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+LOCAL_RE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d$")
+BANDS = 100
+MAX_READ_BODY = 16 * 1024
+LOG_START = "2026-10-17"                                       # nothing was logged before this; "unopened" means since then
+_READS = {"ino": None, "offset": 0, "views": {}}
+
+
+def reads_file():
+    return os.path.join(DATA, "reads", "views.jsonl")
+
+
+def views():
+    """Latest checkpoint per view id. Parses only the lines appended since the last call, so a page render
+    costs O(new checkpoints), not O(the whole log); memory is O(views)."""
+    path = reads_file()
+    with LOCK:
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            _READS.update(ino=None, offset=0, views={})
+            return {}
+        if st.st_ino != _READS["ino"] or st.st_size < _READS["offset"]:    # replaced or truncated: start over
+            _READS.update(ino=st.st_ino, offset=0, views={})
+        if st.st_size > _READS["offset"]:
+            with open(path, "rb") as fh:
+                fh.seek(_READS["offset"])
+                chunk = fh.read(st.st_size - _READS["offset"])
+            end = chunk.rfind(b"\n") + 1                       # a half-written last line waits for the next call
+            for line in chunk[:end].splitlines():
+                try:
+                    r = json.loads(line)
+                    old = _READS["views"].get(r["v"])
+                    if old is None or r["seq"] >= old["seq"]:
+                        _READS["views"][r["v"]] = r
+                except (ValueError, KeyError, TypeError):           # only this app writes the log; skip, never crash
+                    continue
+            _READS["offset"] += end
+        return dict(_READS["views"])
+
+
+def reading_by_path():
+    out = {}
+    for r in views().values():
+        a = out.setdefault(r["path"], {"views": 0, "active_s": 0, "dwell": [0] * BANDS, "last": ""})
+        a["views"] += 1
+        a["active_s"] += r.get("active_s", 0)
+        for k, sec in enumerate(r.get("dwell", [])[:BANDS]):
+            a["dwell"][k] += sec
+        a["last"] = max(a["last"], r.get("local", ""))
+    return out
+
+
+def minutes(sec):
+    return "under 1 min" if sec < 60 else f"{round(sec / 60)} min"
+
+
+def strip(dwell):
+    """The document as a 100-band bar, top of the page on the left: brighter = on screen longer, dark = never on screen."""
+    top = max(dwell) or 1
+    rects = "".join(f'<rect x="{k}" width="1" height="6" fill="#52a8ff" fill-opacity="{0.25 + 0.75 * sec / top:.2f}"/>'
+                    for k, sec in enumerate(dwell) if sec)
+    return (f'<svg class="strip" viewBox="0 0 {BANDS} 6" preserveAspectRatio="none" role="img" '
+            f'aria-label="which part of the page was on screen"><rect width="{BANDS}" height="6" fill="#1a1a1a"/>{rects}</svg>')
+
+
+def reading_line(a):
+    if not a:
+        return f'<p class="read">no visit logged since {LOG_START}</p>'
+    seen = sum(1 for sec in a["dwell"] if sec)
+    times = f'{a["views"]} visits, ' if a["views"] > 1 else ""
+    return (f'<p class="read">{times}{minutes(a["active_s"])} active, {seen}% of the page on screen, '
+            f'last {esc(a["last"] or "?")}</p>{strip(a["dwell"])}')
+
+
+READ_JS = r"""
+(()=>{if(window.__n1read)return;window.__n1read=1;
+// n1 reading log: seconds this page was on screen while you were active, and which 1% bands of it were in view.
+const B=100,dw=new Array(B).fill(0),id=(self.crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+let vis=0,act=0,maxd=0,last=Date.now(),dirty=false,seq=0,fails=0;
+const p2=n=>String(n).padStart(2,'0'),d0=new Date(),local=d0.getFullYear()+'-'+p2(d0.getMonth()+1)+'-'+p2(d0.getDate())+' '+p2(d0.getHours())+':'+p2(d0.getMinutes());
+const H=()=>Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0,innerHeight,1);
+for(const e of ['scroll','touchstart','touchmove','keydown','mousemove','wheel','click'])addEventListener(e,()=>{last=Date.now()},{passive:true});
+setInterval(()=>{if(document.hidden)return;vis++;if(Date.now()-last>60000)return;act++;
+  const h=H(),y=Math.max(0,scrollY),a=Math.floor(B*y/h),b=Math.min(B-1,Math.ceil(B*(y+innerHeight)/h)-1);
+  for(let k=Math.max(0,a);k<=b;k++)dw[k]++;maxd=Math.max(maxd,Math.min(1,(y+innerHeight)/h));dirty=true},1000);
+function warn(m){let el=document.getElementById('n1readerr');if(!el){el=document.createElement('div');el.id='n1readerr';
+  el.style.cssText='position:fixed;left:8px;bottom:8px;z-index:99;background:#3c1618;color:#ff6166;font:12px/16px ui-monospace,monospace;padding:4px 8px;border-radius:4px';
+  document.body.appendChild(el)}el.textContent='reading log NOT SAVING: '+m}
+function send(beacon){if(!dirty)return;dirty=false;
+  const body=JSON.stringify({v:id,seq:++seq,path:location.pathname,title:document.title.slice(0,200),local,visible_s:vis,active_s:act,
+    max_depth:+maxd.toFixed(3),dwell:dw,vw:innerWidth,vh:innerHeight,doc_h:H(),dpr:devicePixelRatio||1});
+  if(beacon&&navigator.sendBeacon&&navigator.sendBeacon('/api/read',new Blob([body],{type:'application/json'})))return;
+  fetch('/api/read',{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:true})
+   .then(r=>{if(!r.ok||r.redirected)throw new Error(r.redirected?'logged out':'HTTP '+r.status);fails=0;const el=document.getElementById('n1readerr');if(el)el.remove()})
+   .catch(e=>{dirty=true;if(++fails>=2)warn(e.message)})}
+setInterval(()=>send(false),30000);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)send(true)});
+addEventListener('pagehide',()=>send(true));
+})();
+"""
+READ_TAG = ("<script>" + READ_JS + "</script>").encode("utf-8")
+
+
+def with_reader(body):
+    """Attach the reading log to a page: before the last </body>, or at the end when there is none."""
+    data = body if isinstance(body, bytes) else body.encode("utf-8")
+    i = data.rfind(b"</body>")
+    if i < 0:                                                   # rare upper-case tag: only then pay for a lowered copy
+        i = data.lower().rfind(b"</body>")
+    return data[:i] + READ_TAG + data[i:] if i >= 0 else data + READ_TAG
 
 
 # ---------------------------------------------------------------- rendering
@@ -165,6 +285,7 @@ a.card:hover{text-decoration:none;box-shadow:0 0 0 1px #3a3a3a}
 .card h3{margin:6px 0 6px}.card p{margin:6px 0}
 .pill{display:inline-block;font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;padding:3px 9px;border-radius:9999px;background:var(--okbg);color:var(--ok)}
 .pill.warn{background:var(--warnbg);color:var(--warn)}.pill.bad{background:var(--badbg);color:var(--bad)}.pill.mute{background:#1a1a1a;color:var(--mute)}
+.read{margin:10px 0 0;font:12px/16px 'Geist Mono',ui-monospace,monospace;color:var(--mute)}.strip{display:block;width:100%;height:6px;border-radius:2px;margin:6px 0 0}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .tw{overflow-x:auto;margin:12px 0}table{border-collapse:collapse;width:100%;font-size:14px;line-height:20px}
 th{font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;color:var(--mute);text-align:left;padding:8px 10px;background:#0f0f0f}
@@ -225,6 +346,14 @@ def index_page():
             parts.append(f'<a class="card" href="/t/{esc(slug)}"><div class="row"><span class="pill warn">task</span>'
                          f'<span class="eyebrow">{done} of {len(t["items"])} done</span></div>'
                          f'<h3>{esc(t.get("title", slug))}</h3><p>{esc(t.get("blurb", ""))}</p></a>')
+    reads = reading_by_path()
+    files = [a["file"] for e in exps for a in e.get("attachments", [])]
+    unread = [f for f in files if "/files/" + f not in reads]
+    week = sum(r.get("active_s", 0) for r in views().values() if r.get("local", "") >= time.strftime("%Y-%m-%d", time.localtime(time.time() - 7 * 86400)))
+    parts.append(f'<a class="card" href="/reads"><div class="row"><span class="pill mute">reading</span>'
+                 f'<span class="eyebrow">{len(files) - len(unread)} of {len(files)} files opened</span></div>'
+                 f'<h3>What I have read, and what I have not</h3><p>{minutes(week)} of active reading in the last 7 days. '
+                 f'{len(unread)} files with no visit logged since {LOG_START}.</p></a>')
     parts.append("<h2>Experiments</h2>")
     for e in exps:
         st = e.get("status", "done")
@@ -254,11 +383,46 @@ def experiment_page(slug):
                          f'<h3>{esc(t.get("title", t_slug))}</h3><p>{esc(t.get("blurb", ""))}</p></a>')
     parts.append(md(e.get("body_md", "")))
     if e.get("attachments"):
+        reads = reading_by_path()
         parts.append("<h2>Files</h2>")
         for a in e["attachments"]:
             parts.append(f'<a class="card" href="/files/{esc(a["file"])}"><h3>{esc(a.get("label", a["file"]))}</h3>'
-                         f'<p>{esc(a.get("note", ""))}</p></a>')
+                         f'<p>{esc(a.get("note", ""))}</p>{reading_line(reads.get("/files/" + a["file"]))}</a>')
     return page(e.get("title", slug), "".join(parts))
+
+
+def reads_page():
+    exps, err = experiments()
+    reads = reading_by_path()
+    parts = ['<nav><a href="/">Lab</a></nav><div class="eyebrow">reading log</div><h1>What I have read.</h1>'
+             '<p>Measured by the browser on whatever screen you read on: seconds the page was visible while you were '
+             'active (touch, scroll or key in the last 60 s), and which 1% bands of the page were in the viewport. '
+             'The bar is the page top to bottom; dark means never on screen. On screen is not the same as read.</p>']
+    if err:
+        parts.append(f'<div class="err">{esc(err)}</div>')
+    parts.append(f"<h2>Not opened since {LOG_START}</h2><p>The log started that day, so older visits are not counted.</p>")
+    n_unread = 0
+    for e in exps:
+        todo = [a for a in e.get("attachments", []) if "/files/" + a["file"] not in reads]
+        if not todo:
+            continue
+        n_unread += len(todo)
+        parts.append(f'<h3><a href="/x/{esc(e["slug"])}">{esc(e.get("title", e["slug"]))}</a> '
+                     f'<span class="eyebrow">{esc(e.get("date", ""))}</span></h3><ul>'
+                     + "".join(f'<li><a href="/files/{esc(a["file"])}">{esc(a.get("label", a["file"]))}</a></li>' for a in todo)
+                     + "</ul>")
+    if not n_unread:
+        parts.append("<p>Every file has been opened at least once.</p>")
+    rows = sorted(views().values(), key=lambda r: (r.get("local", ""), r.get("at", "")), reverse=True)[:60]
+    parts.append(f"<h2>Sessions</h2><p>{len(rows)} most recent.</p>" if rows else "<h2>Sessions</h2><p>None yet.</p>")
+    for r in rows:
+        seen = sum(1 for sec in r.get("dwell", []) if sec)
+        parts.append(f'<a class="card" href="{esc(r["path"])}"><div class="row"><span class="eyebrow">{esc(r.get("local", "?"))}</span>'
+                     f'<span class="eyebrow">{r.get("vw", 0)}x{r.get("vh", 0)}</span></div>'
+                     f'<h3>{esc(r.get("title") or r["path"])}</h3><p class="read">{minutes(r.get("active_s", 0))} active of '
+                     f'{minutes(r.get("visible_s", 0))} open, {seen}% on screen, deepest {round(100 * r.get("max_depth", 0))}%</p>'
+                     f'{strip(r.get("dwell", [0] * BANDS))}</a>')
+    return page("Reading log", "".join(parts))
 
 
 TASK_JS = r"""
@@ -398,10 +562,15 @@ class H(BaseHTTPRequestHandler):
                 return self.send(404 if err == "no such sample" else 500,
                                  json.dumps({"ok": False, "error": err}), "application/json")
             return self.send(200, data, "audio/wav", "private, no-store")
+        if path == "/reads":
+            return self.send(200, reads_page())
+        if path == "/export-reads":                                  # the Mac pulls the reading log from here (owner login)
+            rows = sorted(views().values(), key=lambda r: r.get("at", ""))
+            return self.send(200, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), "application/x-ndjson")
         m = re.match(r"^/x/([A-Za-z0-9_-]{1,64})$", path)
         if m:
             out = experiment_page(m.group(1))
-            return self.send(200, out) if out else self.not_found()
+            return self.send(200, with_reader(out)) if out else self.not_found()
         m = re.match(r"^/t/([A-Za-z0-9_-]{1,64})$", path)
         if m:
             out = task_page(m.group(1))
@@ -418,10 +587,14 @@ class H(BaseHTTPRequestHandler):
             if os.path.isfile(fp):
                 ctype = mimetypes.guess_type(fp)[0] or "application/octet-stream"
                 if fp.endswith(".md"):
-                    text = open(fp, encoding="utf-8").read()
-                    return self.send(200, page(m.group(2), '<nav><a href="/">Lab</a></nav>' + md(text)))
+                    with open(fp, encoding="utf-8") as fh:
+                        text = fh.read()
+                    return self.send(200, with_reader(page(m.group(2), '<nav><a href="/">Lab</a></nav>' + md(text))))
                 with open(fp, "rb") as fh:
-                    return self.send(200, fh.read(), ctype, "public, max-age=604800" if m.group(1) == "fonts" else "no-store")
+                    data = fh.read()
+                if m.group(1) == "files" and ctype == "text/html":
+                    data = with_reader(data)
+                return self.send(200, data, ctype, "public, max-age=604800" if m.group(1) == "fonts" else "no-store")
         return self.not_found()
 
     do_HEAD = do_GET
@@ -447,6 +620,8 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/api/voice/sample":
             return self.post_voice_sample()
+        if path == "/api/read":
+            return self.post_read()
         m = re.match(r"^/api/task/([A-Za-z0-9_-]{1,64})/answer$", path)
         if not m:
             return self.send(404, '{"error":"no such route"}', "application/json")
@@ -476,6 +651,44 @@ class H(BaseHTTPRequestHandler):
                 fh.flush()
                 os.fsync(fh.fileno())
         except OSError as exc:                                  # the phone shows NOT SAVED; never a silent 200
+            return self.send(500, json.dumps({"error": f"could not write: {exc}"}), "application/json")
+        return self.send(200, '{"ok":true}', "application/json")
+
+    def post_read(self):
+        """POST /api/read: one cumulative checkpoint of a page view. Validated hard; a failed write is a 500, never a silent 200."""
+        if self.cross_site():
+            return self.send(403, '{"error":"cross-site write refused"}', "application/json")
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            if not 0 < n <= MAX_READ_BODY:
+                raise ValueError("body size")
+            req = json.loads(self.rfile.read(n))
+            dwell = req["dwell"]
+            if not isinstance(dwell, list) or len(dwell) != BANDS:
+                raise ValueError(f"dwell must be {BANDS} numbers")
+            local = str(req.get("local", ""))
+            row = {"v": str(req["v"]), "seq": int(req["seq"]), "path": str(req["path"]),
+                   "title": clean(str(req.get("title", "")))[:200], "local": local if LOCAL_RE.match(local) else "",
+                   "visible_s": int(req["visible_s"]), "active_s": int(req["active_s"]),
+                   "max_depth": round(float(req["max_depth"]), 3), "dwell": [int(x) for x in dwell],
+                   "vw": int(req["vw"]), "vh": int(req["vh"]), "doc_h": int(req["doc_h"]),
+                   "dpr": round(float(req.get("dpr", 1)), 2),
+                   "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "ua": self.headers.get("User-Agent", "")[:80]}
+            if not VIEW_ID_RE.match(row["v"]) or not READ_PATH_RE.match(row["path"]):
+                raise ValueError("bad view id or path")
+            if not (0 < row["seq"] < 10 ** 6 and 0 <= row["active_s"] <= row["visible_s"] <= 86400
+                    and all(0 <= x <= 86400 for x in row["dwell"]) and 0 <= row["max_depth"] <= 1
+                    and all(0 <= row[k] <= 100000 for k in ("vw", "vh", "doc_h")) and 0 < row["dpr"] <= 10):
+                raise ValueError("value out of range")
+        except (ValueError, KeyError, TypeError) as exc:
+            return self.send(400, json.dumps({"error": f"bad request: {exc}"}), "application/json")
+        try:
+            os.makedirs(os.path.dirname(reads_file()), exist_ok=True)
+            with LOCK, open(reads_file(), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError as exc:
             return self.send(500, json.dumps({"error": f"could not write: {exc}"}), "application/json")
         return self.send(200, '{"ok":true}', "application/json")
 

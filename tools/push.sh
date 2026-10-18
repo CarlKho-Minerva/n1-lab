@@ -22,6 +22,16 @@ pull)
     *EMPTY*) echo "no responses yet (checked: the app answered, responses/ is empty)" ;;
     *) echo "FAIL: unexpected state from the zone: '$state' (is content pushed? is the data path right?)" >&2; exit 1 ;;
   esac
+  # The reading log (time on screen and scroll coverage per page view) comes home the same way.
+  rstate=$("$OH" app ssh n1 '[ -f /data/app_data/n1/reads/views.jsonl ] && echo HAVE || echo EMPTY') \
+    || { echo "FAIL: could not reach the n1 app over oh app ssh for the reading log" >&2; exit 1; }
+  case "$rstate" in
+    *HAVE*) "$OH" app ssh n1 'cd /data/app_data/n1 && tar czf - reads' | tar xzf - -C private/ \
+              || { echo "FAIL: the reading log exists on the zone but the copy failed" >&2; exit 1; }
+            echo "reads: $(wc -l < private/reads/views.jsonl | tr -d ' ') checkpoints" ;;
+    *EMPTY*) echo "reads: none logged yet" ;;
+    *) echo "FAIL: unexpected reading-log state from the zone: '$rstate'" >&2; exit 1 ;;
+  esac
   ;;
 *) echo "usage: tools/push.sh push|pull" >&2; exit 2 ;;
 esac
