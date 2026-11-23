@@ -68,6 +68,10 @@ BLOCK = {
     "owner-only link": r"(?i)(?:href|src|action)=[\"']/(?!r/)[^\"'/]|\]\(/(?!r/)",
 }
 B64 = re.compile(r"data:image/([a-z+]+);base64,([A-Za-z0-9+/=]+)")
+# Compressed pixels read as random letters, so every word pattern would fire by chance. In a picture that is not
+# a PNG (whose text chunks are read properly) only these unmistakable shapes are searched for.
+STRICT = re.compile(r"/Users/[A-Za-z]{2}|C:\\+Users\\|/home/[a-z]{2,}/|[A-Za-z0-9-]{3,}\.ts\.net"
+                    r"|[A-Za-z0-9._%+-]{3,}@[A-Za-z0-9-]{2,}\.(?:com|edu|org|net|io|life)\b")
 SCRIPT = re.compile(r"(?is)<script\b.*?</script\s*>")
 # Reading on a phone: code wraps instead of running off the edge, printed output wraps between words instead of
 # in the middle of a number, wide tables and figures stay inside the screen. Reviewer copies only.
@@ -151,7 +155,7 @@ class Checker:
                 else:
                     blobs.append((" [inline png text]", meta))
             else:
-                blobs.append((f" [inline {kind}]", "".join(ch if 32 <= ord(ch) < 127 else " " for ch in data.decode("latin-1"))))
+                hits += [(f"path, host or address inside an inline {kind}", m2.group(0)) for m2 in STRICT.finditer(data.decode("latin-1"))]
         for tag, body in blobs:
             for cat, rx in self.rx.items():
                 for m in rx.finditer(body):
@@ -166,10 +170,11 @@ class Checker:
         return hits
 
     def scan_bytes(self, where, data):
-        """A picture on disk: only the text it carries, and plain strings in other formats."""
+        """A picture on disk: the text a PNG carries is searched in full; any other format for the strict shapes only."""
         meta = png_text(data)
-        text = meta if meta is not None else "".join(ch if 32 <= ord(ch) < 127 else " " for ch in data.decode("latin-1"))
-        return self.scan(where, text)
+        if meta is not None:
+            return self.scan(where, meta)
+        return [("path, host or address inside the picture", m.group(0)) for m in STRICT.finditer(data.decode("latin-1"))]
 
 
 def apply_scrubs(text, scrubs, where):

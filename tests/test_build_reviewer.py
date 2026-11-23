@@ -153,6 +153,23 @@ class BuildTest(unittest.TestCase):
             self.assertEqual(self.read("experiments.json"), before, want)
         self.assertEqual([d for d in os.listdir(self.dir) if ".building-" in d], [])
 
+    def test_pictures_are_searched_for_what_they_carry(self):
+        import base64, struct, zlib
+        def png(text):
+            def chunk(kind, body):
+                return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+            return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", b"\x00" * 13) + chunk(b"tEXt", text) + chunk(b"IEND", b"")
+        check = build_reviewer.Checker({})
+        clean = base64.b64encode(png(b"Software\x00Matplotlib")).decode()
+        leaky = base64.b64encode(png(b"Source\x00/Users/someone/figures/a.py")).decode()
+        noise = base64.b64encode(bytes(range(256)) * 40 + b" rent bank visa hospital ").decode()
+        self.assertEqual(check.scan("a.html", f'<img src="data:image/png;base64,{clean}">'), [])
+        self.assertTrue(any("local path" in cat for cat, _ in check.scan("a.html", f'<img src="data:image/png;base64,{leaky}">')))
+        self.assertEqual(check.scan("a.html", f'<img src="data:image/jpeg;base64,{noise}">'), [])       # pixels are not words
+        path_in_jpeg = base64.b64encode(b"\xff\xd8 /Users/someone/x.jpg \xff\xd9").decode()
+        self.assertEqual(len(check.scan("a.html", f'<img src="data:image/jpeg;base64,{path_in_jpeg}">')), 1)
+        self.assertTrue(check.scan("a.html", '<img src="data:image/png;base64,AAAA">'))                 # says png, is not: refused
+
     def test_an_allowance_covers_only_its_own_words(self):
         r = rules(allow=[{"text": "someone@example.com", "why": "a made-up address in a test"}])
         got = self.run_tool(r)
