@@ -287,8 +287,10 @@ h2{font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.96px;margin:
 h3{font-size:20px;line-height:28px;font-weight:600;letter-spacing:-.6px;margin:24px 0 8px}
 h4{font-size:16px;font-weight:600;margin:20px 0 6px}
 p,li{color:var(--body)}strong{color:var(--ink);font-weight:600}ul{padding-left:20px}
+h1,h2,h3,p,li,td{overflow-wrap:break-word}
 code,.mono{font:13px/20px 'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
-code{background:#1a1a1a;border-radius:4px;padding:1px 5px;color:var(--ink)}
+code{background:#1a1a1a;border-radius:4px;padding:1px 5px;color:var(--ink);overflow-wrap:anywhere}
+.clamp3,.clamp4{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}.clamp3{-webkit-line-clamp:3}.clamp4{-webkit-line-clamp:4}
 .eyebrow{font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;color:var(--mute)}
 .card{display:block;background:var(--card);border-radius:8px;padding:20px;margin:16px 0;box-shadow:0 0 0 1px var(--hair)}
 a.card:hover{text-decoration:none;box-shadow:0 0 0 1px #3a3a3a}
@@ -370,8 +372,8 @@ def index_page():
         parts.append(f'<a class="card" href="/x/{esc(e["slug"])}"><div class="row">'
                      f'<span class="pill {STATUS_PILL.get(st, "")}">{esc(st)}</span>'
                      f'<span class="eyebrow">{esc(e.get("date", ""))}</span></div>'
-                     f'<h3>{esc(e.get("title", e["slug"]))}</h3><p>{esc(e.get("question", ""))}</p>'
-                     f'<p><strong>{esc(e.get("result", ""))}</strong></p></a>')
+                     f'<h3>{esc(e.get("title", e["slug"]))}</h3><p class="clamp3">{esc(e.get("question", ""))}</p>'
+                     f'<p class="clamp4"><strong>{esc(e.get("result", ""))}</strong></p></a>')
     return page("n=1 lab", "".join(parts))
 
 
@@ -384,6 +386,8 @@ def experiment_page(slug):
     parts = [f'<nav><a href="/">All experiments</a></nav><div class="row"><span class="pill {STATUS_PILL.get(st, "")}">{esc(st)}</span>'
              f'<span class="eyebrow">{esc(e.get("date", ""))}</span></div><h1>{esc(e.get("title", slug))}</h1>'
              f'<p>{esc(e.get("question", ""))}</p>']
+    if e.get("result"):
+        parts.append(f'<div class="card"><div class="eyebrow">Result</div><p><strong>{esc(e["result"])}</strong></p></div>')
     for t_slug in e.get("tasks", []):
         t, _ = task(t_slug)
         if t:
@@ -543,7 +547,6 @@ REVIEW_HEADERS = (("Content-Security-Policy", "default-src 'none'; style-src 'un
                    "font-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
                   ("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"))
 REVIEW_CSS = """
-.q{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .res{color:var(--ink);font-weight:500}
 .field{width:100%;background:var(--card);color:var(--ink);border:0;box-shadow:0 0 0 1px var(--hair);border-radius:6px;padding:14px;font:16px/24px Geist,system-ui,sans-serif;margin:8px 0 16px}
 .field:focus{outline:2px solid var(--ok);outline-offset:1px}
@@ -658,7 +661,7 @@ def reviewer_index_page():
     for e in exps:
         line = e["result_line"] or e["result"]
         parts.append(f'<a class="card" href="/r/x/{esc(e["slug"])}">{reviewer_meta(e)}<h3>{esc(e["title"] or e["slug"])}</h3>'
-                     f'<p class="q">{esc(e["question"])}</p><p class="res">{esc(line)}</p></a>')
+                     f'<p class="clamp3">{esc(e["question"])}</p><p class="res">{esc(line)}</p></a>')
     if not exps:
         parts.append("<p>Nothing has been shared here yet.</p>")
     return reviewer_page(head.get("title", "Studies"), "".join(parts))
@@ -895,7 +898,16 @@ class H(BaseHTTPRequestHandler):
                 if fp.endswith(".md"):
                     with open(fp, encoding="utf-8") as fh:
                         text = fh.read()
-                    return self.send(200, with_reader(page(m.group(2), '<nav><a href="/">Lab</a></nav>' + md(text))))
+                    title, nav = m.group(2), '<nav><a href="/">Lab</a></nav>'
+                    if m.group(1) == "files":                      # titled by its label, with a way back to its study
+                        for e in experiments()[0]:
+                            a = next((a for a in e.get("attachments", []) if a.get("file") == m.group(2)), None)
+                            if a:
+                                title = a.get("label") or title
+                                nav = (f'<nav><a href="/x/{esc(e["slug"])}">{esc(e.get("title", e["slug"]))}</a>'
+                                       f'<a href="/">Lab</a></nav>')
+                                break
+                    return self.send(200, with_reader(page(title, nav + md(text))))
                 with open(fp, "rb") as fh:
                     data = fh.read()
                 if m.group(1) == "files" and ctype == "text/html":

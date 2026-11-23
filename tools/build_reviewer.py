@@ -264,6 +264,7 @@ def build(rules, content, tmp):
                 s = apply_scrubs(s, f.get("scrub"), name)
                 if ext == ".html":
                     s, fr["scripts_removed"] = SCRIPT.subn("", s)
+                    s = s.replace("\u2014", "-").replace("\u2013", "-")     # the site's rule: no em or en dashes on a page
                     s = relink(s, files_ok, slugs_ok, True)
                     label = f.get("title") or f.get("label")
                     if label:
