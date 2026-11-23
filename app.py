@@ -3,8 +3,10 @@
 
 An archive of the experiments he runs on himself, plus phone-first review tasks (tick the
 labels a model got wrong, blinded reads). Everything except /healthz sits behind the zone's
-owner login (see openhost.toml); this file adds no auth of its own and must never be made public,
-because it has write endpoints and serves private notes.
+owner login (see openhost.toml). The owner pages have write endpoints and serve private notes, so none of
+them may ever be made public. The one exception is the reviewer area under /r/ (see "reviewer area" below):
+read-only, behind its own shared password, off unless reviewer_auth.json exists in the data dir, and showing
+only the reviewer copies of entries that were explicitly marked for reviewers.
 
 Content lives OUTSIDE this repo, in the app's data dir, and is re-read on every request:
     $OPENHOST_APP_DATA_DIR/experiments.json     the archive (one entry per experiment)
@@ -14,8 +16,14 @@ Content lives OUTSIDE this repo, in the app's data dir, and is re-read on every 
     $OPENHOST_APP_DATA_DIR/reads/views.jsonl        reading log: time on screen and scroll coverage per page view
     $OPENHOST_APP_DATA_DIR/voice/samples/<uuid>.{wav,json}   explicitly labelled voice samples (voice_store.py);
                                                 collection only, nothing here trains or verifies
+    $OPENHOST_APP_DATA_DIR/reviewer/experiments.json   what reviewers may see (built by tools/build_reviewer.py)
+    $OPENHOST_APP_DATA_DIR/reviewer/files/*            scrubbed, leak-checked reviewer copies of attachments
+    $OPENHOST_APP_DATA_DIR/reviewer_auth.json          salted hash of the reviewer password (reviewer_auth.py)
+    $OPENHOST_APP_DATA_DIR/owner_guard                 optional; "enforce" makes owner pages demand the router's owner mark
 Copy content in with `oh app ssh` (tools/push.sh). The repo holds code and sample data only.
 """
+import hashlib
+import hmac
 import html
 import json
 import mimetypes
@@ -24,8 +32,10 @@ import re
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import reviewer_auth
 import voice_store
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -508,6 +518,195 @@ def task_page(slug):
     return page(t.get("title", slug), libs + body, TASK_CSS)
 
 
+# ---------------------------------------------------------------- reviewer area (/r/)
+# One path prefix, one shared password, read-only. It exists so that "/r/" can be the only prefix ever added to
+# public_paths: every route below is matched under /r/ and nothing here reaches an owner route.
+#   - OFF unless reviewer_auth.json exists in the data dir: then every /r/ path answers the same 404 as any
+#     unknown path.
+#   - A reviewer sees only entries in reviewer/experiments.json that carry "reviewer": true, and only attachments
+#     that carry "reviewer": true and whose bytes in reviewer/files/ match the sha256 the build recorded after its
+#     leak check. The owner's experiments.json, files/, tasks/ and responses/ are never served from here.
+#   - Review tasks are never shown and there is no task, answer, export, reading-log or listing route under /r/.
+#   - The only state a reviewer request can change is the wrong-password counter, which lives in memory.
+REVIEW_NEVER = frozenset({"mit-application"})           # never markable for reviewers, whatever the content says
+REVIEW_NEVER_FILE_PREFIXES = ("mit_",)                  # that entry's attachments, by name
+REVIEW_FILE_TYPES = {".html": "text/html; charset=utf-8", ".md": None, ".txt": "text/plain; charset=utf-8",
+                     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+                     ".gif": "image/gif"}
+REVIEW_FONTS = {"geist.woff2": "font/woff2", "geist-mono.woff2": "font/woff2", "OFL.txt": "text/plain; charset=utf-8"}
+REVIEW_NEXT_RE = re.compile(r"^/r/(?:x/[A-Za-z0-9_-]{1,64}|files/[A-Za-z0-9_.-]{1,120})$")
+REVIEW_ATTEMPTS = reviewer_auth.Attempts()
+REVIEW_HASH_GATE = threading.BoundedSemaphore(1)        # one slow hash at a time: the container has a tenth of a core
+MAX_LOGIN_BODY = 4096
+# No script may run on a reviewer page and nothing may load from, or be sent to, another site.
+REVIEW_HEADERS = (("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; "
+                   "font-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+                  ("X-Content-Type-Options", "nosniff"), ("X-Frame-Options", "DENY"))
+REVIEW_CSS = """
+.q{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.res{color:var(--ink);font-weight:500}
+.field{width:100%;background:var(--card);color:var(--ink);border:0;box-shadow:0 0 0 1px var(--hair);border-radius:6px;padding:14px;font:16px/24px Geist,system-ui,sans-serif;margin:8px 0 16px}
+.field:focus{outline:2px solid var(--ok);outline-offset:1px}
+label{display:block;color:var(--body);font-size:14px;line-height:20px}
+.linkbtn{background:none;border:0;padding:0;color:var(--mute);font:12px/16px 'Geist Mono',ui-monospace,monospace;text-transform:uppercase;cursor:pointer}
+.note{color:var(--mute);font-size:14px;line-height:20px}
+"""
+
+
+def review_file_ok(name):
+    return (isinstance(name, str) and bool(FILE_RE.match(name)) and ".." not in name and not name.startswith(".")
+            and os.path.splitext(name)[1].lower() in REVIEW_FILE_TYPES
+            and not name.lower().startswith(REVIEW_NEVER_FILE_PREFIXES))
+
+
+def review_never_files():
+    """Attachment names of the never-for-reviewers entries, read from the owner's content: a third fence, so a
+    reviewer file cannot carry one of those names even without the prefix."""
+    doc, _ = read_json(os.path.join(DATA, "experiments.json"))
+    out = set()
+    for e in (doc or {}).get("experiments", []) if isinstance(doc, dict) else []:
+        if isinstance(e, dict) and e.get("slug") in REVIEW_NEVER:
+            out.update(a.get("file") for a in e.get("attachments", []) if isinstance(a, dict))
+    return out
+
+
+def reviewer_site():
+    """(entries, header) a signed-in reviewer may see. Anything not explicitly marked is absent: default hidden."""
+    doc, err = read_json(os.path.join(DATA, "reviewer", "experiments.json"))
+    if not isinstance(doc, dict):
+        return [], {}
+    never = review_never_files()
+    out = []
+    for e in doc.get("experiments", []) if isinstance(doc.get("experiments"), list) else []:
+        if not isinstance(e, dict) or e.get("reviewer") is not True:
+            continue
+        slug = e.get("slug")
+        if not isinstance(slug, str) or not SLUG_RE.match(slug) or slug in REVIEW_NEVER:
+            continue
+        files = [{"file": a["file"], "sha256": a["sha256"], "label": str(a.get("label") or a["file"]), "note": str(a.get("note") or "")}
+                 for a in (e.get("attachments") if isinstance(e.get("attachments"), list) else [])
+                 if isinstance(a, dict) and a.get("reviewer") is True and review_file_ok(a.get("file"))
+                 and a.get("file") not in never and isinstance(a.get("sha256"), str)]
+        row = {k: str(e.get(k) or "") for k in ("title", "question", "result", "result_line", "date", "status", "body_md")}
+        row.update(slug=slug, n1=e.get("n1") is True, attachments=files)
+        out.append(row)
+    head = doc.get("site") if isinstance(doc.get("site"), dict) else {}
+    return sorted(out, key=lambda e: e["date"], reverse=True), {k: str(v) for k, v in head.items() if isinstance(v, str)}
+
+
+def reviewer_file(name):
+    """(bytes, entry, attachment) for a file a reviewer may read, else None. The bytes must be exactly the ones
+    the build checked: a file swapped in afterwards (an owner original, a symlink) does not match and is refused."""
+    if not review_file_ok(name):
+        return None
+    for e in reviewer_site()[0]:
+        for a in e["attachments"]:
+            if a["file"] != name:
+                continue
+            fp = os.path.join(DATA, "reviewer", "files", name)
+            try:
+                if os.path.islink(fp) or not os.path.isfile(fp):
+                    return None
+                with open(fp, "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                return None
+            if not hmac.compare_digest(hashlib.sha256(data).hexdigest(), a["sha256"]):
+                print(f"reviewer file REFUSED: {name} does not match the checked copy", file=sys.stderr, flush=True)
+                return None
+            return data, e, a
+    return None
+
+
+def reviewer_page(title, body):
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
+            f'<meta name="robots" content="noindex,nofollow"><title>{esc(title)}</title>'
+            f'<style>{CSS.replace("url(/fonts/", "url(/r/fonts/")}{REVIEW_CSS}</style></head><body><main>{body}</main></body></html>')
+
+
+REVIEW_SIGN_OUT = '<form method="post" action="/r/logout" style="margin:0"><button class="linkbtn">Sign out</button></form>'
+
+
+def reviewer_login_page(message="", nxt=""):
+    msg = f'<div class="err" role="alert">{esc(message)}</div>' if message else ""
+    hidden = f'<input type="hidden" name="next" value="{esc(nxt)}">' if nxt and REVIEW_NEXT_RE.match(nxt) else ""
+    return reviewer_page("Reviewer sign-in",
+                         '<div class="eyebrow">n = 1 lab</div><h1>Reviewer sign-in</h1>'
+                         '<p>Carl Kho\'s studies, read-only. Enter the password you were given.</p>'
+                         f'{msg}<form method="post" action="/r/login">{hidden}'
+                         '<label for="pw">Password</label>'
+                         '<input class="field" id="pw" name="password" type="password" autocomplete="current-password" '
+                         'autocapitalize="off" autocorrect="off" spellcheck="false" required autofocus>'
+                         '<button class="btn" type="submit">Open</button></form>')
+
+
+def reviewer_meta(e):
+    st = e["status"] or "done"
+    n1 = '<span class="eyebrow">single subject (N=1)</span>' if e["n1"] else ""
+    return (f'<div class="row"><span class="pill {STATUS_PILL.get(st, "")}">{esc(st)}</span>'
+            f'<span class="eyebrow">{esc(e["date"])}</span>{n1}</div>')
+
+
+def reviewer_index_page():
+    exps, head = reviewer_site()
+    parts = [f'<nav><span class="eyebrow">{esc(head.get("eyebrow", "n = 1 lab"))}</span>{REVIEW_SIGN_OUT}</nav>'
+             f'<h1>{esc(head.get("title", "Studies"))}</h1>']
+    if head.get("intro"):
+        parts.append(f'<p>{esc(head["intro"])}</p>')
+    parts.append(f'<p class="note">{len(exps)} {"study" if len(exps) == 1 else "studies"}, newest first. Read-only.</p>')
+    for e in exps:
+        line = e["result_line"] or e["result"]
+        parts.append(f'<a class="card" href="/r/x/{esc(e["slug"])}">{reviewer_meta(e)}<h3>{esc(e["title"] or e["slug"])}</h3>'
+                     f'<p class="q">{esc(e["question"])}</p><p class="res">{esc(line)}</p></a>')
+    if not exps:
+        parts.append("<p>Nothing has been shared here yet.</p>")
+    return reviewer_page(head.get("title", "Studies"), "".join(parts))
+
+
+def reviewer_study_page(slug):
+    e = next((x for x in reviewer_site()[0] if x["slug"] == slug), None)
+    if not e:
+        return None
+    parts = [f'<nav><a href="/r/">All studies</a>{REVIEW_SIGN_OUT}</nav>{reviewer_meta(e)}'
+             f'<h1>{esc(e["title"] or slug)}</h1><p>{esc(e["question"])}</p>']
+    if e["result"]:
+        parts.append(f'<div class="card"><div class="eyebrow">Result</div><p class="res">{esc(e["result"])}</p></div>')
+    parts.append(md(e["body_md"]))
+    if e["attachments"]:
+        parts.append("<h2>Files</h2>")
+        for a in e["attachments"]:
+            parts.append(f'<a class="card" href="/r/files/{esc(a["file"])}"><h3>{esc(a["label"])}</h3><p>{esc(a["note"])}</p></a>')
+    return reviewer_page(e["title"] or slug, "".join(parts))
+
+
+# ---------------------------------------------------------------- owner guard (optional second fence)
+# The zone's router marks a request it has authenticated as the owner's with "X-OpenHost-Is-Owner: true" and
+# strips that header from anything a client sends. When the data dir holds a file named owner_guard containing
+# "enforce", every route except /healthz and /r/ answers 403 without that mark, so an owner page stays closed
+# even if a public prefix were ever matched more loosely than this app expects. Off when the file is absent.
+_GUARD = {"stamp": None, "on": False}
+
+
+def owner_guard_on():
+    path = os.path.join(DATA, "owner_guard")
+    try:
+        st = os.stat(path)
+    except OSError:
+        _GUARD.update(stamp=None, on=False)
+        return False
+    stamp = (path, st.st_ino, st.st_mtime_ns, st.st_size)
+    if _GUARD["stamp"] != stamp:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                on = fh.read(64).strip() == "enforce"
+        except OSError as exc:                                     # unreadable guard file: stay closed, and say so
+            print(f"owner guard: cannot read {path} ({exc}); treating it as enforce", file=sys.stderr, flush=True)
+            on = True
+        _GUARD.update(stamp=stamp, on=on)
+    return _GUARD["on"]
+
+
 # ---------------------------------------------------------------- server
 
 class H(BaseHTTPRequestHandler):
@@ -516,7 +715,14 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"{self.address_string()} {fmt % args}", flush=True)
 
-    def send(self, code, body, ctype="text/html; charset=utf-8", cache="no-store"):
+    def log_request(self, code="-", size="-"):
+        line = self.requestline
+        if getattr(self, "path", "").split("?", 1)[0].rstrip("/") == "/r" or getattr(self, "path", "").startswith("/r/"):
+            # never a query string in the log under /r/: a password typed into a URL must not be recorded
+            line = f"{self.command} {self.path.split('?', 1)[0]} {self.request_version}"
+        self.log_message('"%s" %s %s', line, str(code), str(size))
+
+    def send(self, code, body, ctype="text/html; charset=utf-8", cache="no-store", extra=()):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -524,6 +730,8 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache)
         self.send_header("X-Robots-Tag", "noindex, nofollow")
         self.send_header("Referrer-Policy", "no-referrer")
+        for k, v in extra:
+            self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -531,12 +739,110 @@ class H(BaseHTTPRequestHandler):
     def not_found(self):
         self.send(404, page("Not found", '<nav><a href="/">Lab</a></nav><h1>Not here.</h1>'))
 
+    def owner_only(self):
+        """True (and a 403 already sent) when the owner guard is on and the router did not mark this request."""
+        if owner_guard_on() and self.headers.get("X-OpenHost-Is-Owner") != "true":
+            sys.stderr.write(f"owner guard: refused {self.command} {self.path.split('?', 1)[0]}\n")
+            self.send(403, page("Owner only", "<h1>Owner sign-in required.</h1><p>This page is served to the zone owner only.</p>"))
+            return True
+        return False
+
+    # ---- reviewer area: every /r/ request is answered here and never falls through to an owner route
+    def review_send(self, code, body, ctype="text/html; charset=utf-8", cache="no-store", extra=()):
+        self.send(code, body, ctype, cache, REVIEW_HEADERS + tuple(extra))
+
+    def review_redirect(self, where, extra=()):
+        self.review_send(303, "", extra=(("Location", where),) + tuple(extra))
+
+    def reviewer_get(self, path):
+        rec = reviewer_auth.load(DATA)
+        if rec is None:                                            # off: the same 404 as any unknown path
+            return self.not_found()
+        m = re.match(r"^/r/fonts/([A-Za-z0-9_.-]{1,120})$", path)
+        if m and m.group(1) in REVIEW_FONTS:                       # the sign-in page needs its typeface; these are public OFL files
+            try:
+                with open(os.path.join(FONT_DIR, m.group(1)), "rb") as fh:
+                    return self.review_send(200, fh.read(), REVIEW_FONTS[m.group(1)], "public, max-age=604800")
+            except OSError:
+                return self.review_send(404, reviewer_page("Not found", "<h1>Not here.</h1>"))
+        signed_in = reviewer_auth.session_from_cookie_header(rec, self.headers.get("Cookie"))
+        if path == "/r/login":
+            return self.review_redirect("/r/") if signed_in else self.review_send(200, reviewer_login_page(nxt=self.review_next()))
+        if not signed_in:                                          # every other path looks the same without a session
+            nxt = "?next=" + urllib.parse.quote(path, safe="/") if REVIEW_NEXT_RE.match(path) else ""
+            return self.review_redirect("/r/login" + nxt)
+        if path in ("/r", "/r/"):
+            return self.review_redirect("/r/") if path == "/r" else self.review_send(200, reviewer_index_page())
+        m = re.match(r"^/r/x/([A-Za-z0-9_-]{1,64})$", path)
+        out = reviewer_study_page(m.group(1)) if m else None
+        if out:
+            return self.review_send(200, out)
+        m = re.match(r"^/r/files/([A-Za-z0-9_.-]{1,120})$", path)
+        got = reviewer_file(m.group(1)) if m else None
+        if got:
+            data, e, a = got
+            ctype = REVIEW_FILE_TYPES[os.path.splitext(a["file"])[1].lower()]
+            if ctype is None:                                      # markdown: rendered inside the reviewer frame
+                back = f'<nav><a href="/r/x/{esc(e["slug"])}">{esc(e["title"] or e["slug"])}</a>{REVIEW_SIGN_OUT}</nav>'
+                return self.review_send(200, reviewer_page(a["label"], back + md(data.decode("utf-8", "replace"))))
+            return self.review_send(200, data, ctype)
+        return self.review_send(404, reviewer_page("Not found", '<nav><a href="/r/">All studies</a></nav><h1>Not here.</h1>'))
+
+    def review_next(self):
+        nxt = urllib.parse.parse_qs(self.path.partition("?")[2], max_num_fields=4).get("next", [""])[0] if "?" in self.path else ""
+        return nxt if REVIEW_NEXT_RE.match(nxt) else ""
+
+    def reviewer_post(self, path):
+        self.close_connection = True                               # some answers below go out before the body is read
+        rec = reviewer_auth.load(DATA)
+        if rec is None:
+            return self.send(404, '{"error":"no such route"}', "application/json")
+        if path not in ("/r/login", "/r/logout"):                  # no other write exists under /r/
+            return self.review_send(404, '{"error":"no such route"}', "application/json")
+        if self.cross_site():
+            return self.review_send(403, reviewer_login_page("That request came from another site and was refused."))
+        if path == "/r/logout":
+            return self.review_redirect("/r/login", (("Set-Cookie", reviewer_auth.clear_cookie_header()),))
+        client = reviewer_auth.client_key(self.client_address[0], self.headers.get("X-Forwarded-For"))
+        wait = REVIEW_ATTEMPTS.blocked(client)
+        if wait:
+            return self.review_send(429, reviewer_login_page(f"Too many wrong tries. Try again in {max(1, round(wait / 60))} min."),
+                                    extra=(("Retry-After", str(wait)),))
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+            if not 0 < n <= MAX_LOGIN_BODY:
+                raise ValueError("body size")
+            form = urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace"), keep_blank_values=True, max_num_fields=4)
+        except ValueError:
+            return self.review_send(400, reviewer_login_page("That did not look like the sign-in form. Try again."))
+        password, nxt = form.get("password", [""])[0], form.get("next", [""])[0]
+        nxt = nxt if REVIEW_NEXT_RE.match(nxt) else ""
+        if not password:
+            return self.review_send(400, reviewer_login_page("Enter the password.", nxt))
+        if not REVIEW_HASH_GATE.acquire(timeout=3):
+            return self.review_send(503, reviewer_login_page("Busy. Try again in a moment.", nxt), extra=(("Retry-After", "3"),))
+        try:
+            ok = reviewer_auth.check_password(rec, password)
+        finally:
+            REVIEW_HASH_GATE.release()
+        if not ok:
+            REVIEW_ATTEMPTS.fail(client)
+            sys.stderr.write(f"reviewer sign-in: wrong password from {client}\n")
+            return self.review_send(401, reviewer_login_page("That password did not match.", nxt))
+        REVIEW_ATTEMPTS.success(client)
+        sys.stderr.write(f"reviewer sign-in: ok from {client}\n")
+        return self.review_redirect(nxt or "/r/", (("Set-Cookie", reviewer_auth.set_cookie_header(reviewer_auth.sign_session(rec))),))
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/healthz":
             exps, err = experiments()
             return self.send(200 if not err else 500, json.dumps({"ok": not err, "experiments": len(exps), "error": err}),
                              "application/json")
+        if path == "/r" or path.startswith("/r/"):
+            return self.reviewer_get(path)
+        if self.owner_only():
+            return
         if path == "/":
             return self.send(200, index_page())
         if path == "/voice":
@@ -618,6 +924,10 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path == "/r" or path.startswith("/r/"):
+            return self.reviewer_post(path)
+        if self.owner_only():
+            return
         if path == "/api/voice/sample":
             return self.post_voice_sample()
         if path == "/api/read":

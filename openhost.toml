@@ -10,8 +10,13 @@ port = 8080
 [routing]
 health_check = "/healthz"
 # Everything except the health check sits behind the zone's owner login. This app HAS write
-# endpoints (task answers) and serves private research notes, so nothing else may ever be
+# endpoints (task answers) and serves private research notes, so no owner path may ever be
 # added here. public_paths is PREFIX-matched: "/" would publish the whole app.
+#
+# The one prefix that may be added, and only on purpose, is the reviewer area: "/r/" WITH the
+# trailing slash ("/r" alone could also match /reads on a router that compares bare prefixes).
+# It is read-only, sits behind its own password (reviewer_auth.py) and answers 404 until that
+# password has been set in the data dir. To open it:  public_paths = ["/healthz", "/r/"]
 public_paths = ["/healthz"]
 
 [resources]
