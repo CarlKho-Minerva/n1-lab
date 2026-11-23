@@ -51,6 +51,9 @@ with `X-OpenHost-Is-Owner: true` and strips that header from clients. With a fil
 `enforce` in the data directory, every route except `/healthz` and `/r/` answers 403 without that mark. Remove
 the file to turn it off.
 
+A local run has no router in front of it and serves every owner page to whoever can connect, so bind it to
+this machine: `N1_BIND=127.0.0.1 OPENHOST_APP_DATA_DIR=<data dir> PORT=18432 python3 -u app.py`.
+
     python3 -m unittest discover -s tests -p "test_reviewer.py" -v
     python3 -m unittest discover -s tests -p "test_build_reviewer.py" -v
 

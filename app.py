@@ -41,6 +41,9 @@ import voice_store
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("OPENHOST_APP_DATA_DIR", os.path.join(HERE, "sample_data"))
 PORT = int(os.environ.get("PORT", "8080"))
+# The container listens on every interface (the zone's router is the gate). A local run has no gate at all, so
+# start it with N1_BIND=127.0.0.1 unless the network is trusted.
+BIND = os.environ.get("N1_BIND", "0.0.0.0")
 FONT_DIR = os.path.join(HERE, "fonts")
 SLUG_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 FILE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
@@ -1060,5 +1063,5 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"n1-lab on :{PORT}, data {DATA}", flush=True)
-    ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    print(f"n1-lab on {BIND}:{PORT}, data {DATA}", flush=True)
+    ThreadingHTTPServer((BIND, PORT), H).serve_forever()
