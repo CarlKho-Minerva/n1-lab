@@ -2,6 +2,9 @@
 # Push private content to the zone and pull Carl's answers home. Content never goes through git or HTTP upload.
 #   tools/push.sh push     build private/content, copy it into /data/app_data/n1 (responses/ is never touched)
 #   tools/push.sh pull     fetch responses/*.jsonl into private/responses/ (append-only logs, safe to re-run)
+#   tools/push.sh push-reviewer   build the reviewer copies (tools/build_reviewer.py, private/reviewer_rules.json) from
+#                          private/content as it stands and swap them into /data/app_data/n1/reviewer; the previous
+#                          set is kept beside it as reviewer.old. Touches nothing else on the zone.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 OH=${OH:-$HOME/.local/bin/oh}
@@ -9,6 +12,14 @@ case "${1:-}" in
 push)
   python3 private/build_content.py
   tar czf - -C private/content experiments.json tasks files | "$OH" app ssh n1 'mkdir -p /data/app_data/n1 && tar xzf - -C /data/app_data/n1 && ls /data/app_data/n1'
+  ;;
+push-reviewer)
+  # The build refuses any file with a leak-check hit and exits non-zero (leaving the last good build) on a bad rule.
+  python3 tools/build_reviewer.py --rules private/reviewer_rules.json --content private/content --out private/reviewer_build
+  [ -f private/reviewer_build/reviewer/experiments.json ] || { echo "FAIL: no reviewer build to push" >&2; exit 1; }
+  # Unpack beside the live folder, check it arrived whole, then swap. A failed copy leaves the live folder untouched.
+  tar czf - -C private/reviewer_build reviewer | "$OH" app ssh n1 'set -e; cd /data/app_data/n1; rm -rf reviewer.new; mkdir reviewer.new; tar xzf - -C reviewer.new; test -f reviewer.new/reviewer/experiments.json; rm -rf reviewer.old; if [ -d reviewer ]; then mv reviewer reviewer.old; fi; mv reviewer.new/reviewer reviewer; rmdir reviewer.new; echo "reviewer files on the zone: $(ls reviewer/files | wc -l)"' \
+    || { echo "FAIL: the reviewer copy did not reach the zone; what was live before is still live" >&2; exit 1; }
   ;;
 pull)
   mkdir -p private/responses
@@ -33,5 +44,5 @@ pull)
     *) echo "FAIL: unexpected reading-log state from the zone: '$rstate'" >&2; exit 1 ;;
   esac
   ;;
-*) echo "usage: tools/push.sh push|pull" >&2; exit 2 ;;
+*) echo "usage: tools/push.sh push|pull|push-reviewer" >&2; exit 2 ;;
 esac

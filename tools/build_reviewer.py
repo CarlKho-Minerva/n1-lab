@@ -15,7 +15,7 @@ The rules file is private (it quotes the strings to cut) and is never committed.
     {"site": {"eyebrow": "", "title": "", "intro": ""},
      "block": {"category": "regex", ...},              extra private patterns: names, places, project names
      "block_files": ["path to a file with one regex per line"],
-     "allow": [{"text": "exact words", "why": "reason"}],        a hit whose surrounding text contains this is let through and listed
+     "allow": [{"text": "exact words", "why": "reason"}],        a hit that lies inside these exact words is let through and listed
      "external_check": ["python3", "path/to/leakcheck.py"],     optional last gate, run on the finished folder; must exit 0
      "entries": [{"slug": "owner-slug", "as": "slug-shown", "mark": true, "n1": true,
                   "set": {"title": "", "question": "", "result": "", "result_line": "", "body_md": "", "date": "", "status": ""},
@@ -69,8 +69,8 @@ BLOCK = {
 }
 B64 = re.compile(r"data:image/([a-z+]+);base64,([A-Za-z0-9+/=]+)")
 SCRIPT = re.compile(r"(?is)<script\b.*?</script\s*>")
-# Reading on a phone: code wraps instead of running off the edge, printed output scrolls sideways instead of
-# breaking numbers in half, wide tables and figures stay inside the screen. Reviewer copies only.
+# Reading on a phone: code wraps instead of running off the edge, printed output wraps between words instead of
+# in the middle of a number, wide tables and figures stay inside the screen. Reviewer copies only.
 PHONE_CSS = ("<style>.n1r-bar{font:14px/20px Geist,Inter,system-ui,-apple-system,sans-serif;background:#0a0a0a;color:#a1a1a1;"
              "border-bottom:1px solid #262626;padding:12px 16px}.n1r-bar a{color:#52a8ff;text-decoration:none}"
              "img,svg,video,canvas{max-width:100%;height:auto}"
@@ -78,7 +78,7 @@ PHONE_CSS = ("<style>.n1r-bar{font:14px/20px Geist,Inter,system-ui,-apple-system
              ".jp-InputPrompt,.jp-OutputPrompt,.jp-Collapser{display:none!important}"
              ".jp-Cell{padding:4px 0!important}.jp-RenderedHTMLCommon{padding-right:0!important}"
              ".jp-CodeCell .jp-InputArea pre,.highlight pre{white-space:pre-wrap!important;overflow-wrap:anywhere;word-break:break-word}"
-             ".jp-OutputArea-output pre{white-space:pre!important;overflow-x:auto;max-width:100%}"
+             ".jp-OutputArea-output pre{white-space:pre-wrap!important;word-break:normal!important;overflow-wrap:break-word}"
              ".jp-RenderedHTMLCommon table,.jp-OutputArea-output table{display:block;overflow-x:auto;max-width:100%}"
              "pre{max-width:100%;overflow-x:auto}}</style>")
 
@@ -156,7 +156,9 @@ class Checker:
             for cat, rx in self.rx.items():
                 for m in rx.finditer(body):
                     ctx = body[max(0, m.start() - 40):m.end() + 40].replace("\n", " ")
-                    ok = next((a for a in allow if a["text"] in ctx), None)
+                    # an allowance covers a hit only when the matched words lie inside the allowed text itself,
+                    # so it cannot wave through a different hit that merely sits nearby
+                    ok = next((a for a in allow if a["text"] in ctx and m.group(0).lower() in a["text"].lower()), None)
                     if ok:
                         self.used.append((where + tag, ok["text"], ok["why"], ctx.strip()))
                     else:
@@ -183,8 +185,12 @@ def apply_scrubs(text, scrubs, where):
 
 
 def first_sentence(text):
-    m = re.match(r"(.+?[.!?])(?:\s|$)", text.strip(), re.S)
-    return (m.group(1) if m else text.strip())[:400]
+    """The one-line result for the index: the result itself when it is already short, else its first sentence."""
+    text = text.strip()
+    if len(text) <= 160:
+        return text
+    m = re.match(r"(.+?[.!?])(?:\s|$)", text, re.S)
+    return (m.group(1) if m else text)[:400]
 
 
 def relink(text, files_ok, slugs_ok, is_html):
@@ -230,7 +236,7 @@ def build(rules, content, tmp):
             row[s[0]] = apply_scrubs(row[s[0]], [s[1:]], f"{slug}.{s[0]}")
         row["body_md"] = relink(row["body_md"], files_ok, slugs_ok, False)
         row["result_line"] = str((e.get("set") or {}).get("result_line") or first_sentence(row["result"]))
-        text = "\n".join(f"{k}: {v}" for k, v in row.items())
+        text = f"slug: {slug}\n" + "\n".join(f"{k}: {v}" for k, v in row.items())      # the slug is in every link
         hits = check.scan(f"{slug} (entry text)", text, e.get("allow") or [])
         rep = {"slug": slug, "from": e["slug"], "marked": not hits, "hits": hits, "files": []}
         files = []

@@ -11,7 +11,48 @@ data directory and are copied in over `oh app ssh` (see `tools/push.sh`); they a
     tools/push.sh push      # content in
     tools/push.sh pull      # answers out
 
-Do not add anything to `public_paths` beyond `/healthz`: the app has a write endpoint.
+Do not add any owner path to `public_paths`: the app has write endpoints. The one prefix that may be added
+is the reviewer area, `/r/` (below).
+
+## Reviewer area (`/r/`)
+
+A read-only view for outside readers, behind one shared password, on the same site and in the same design.
+It is off until a password has been set: without `reviewer_auth.json` in the data directory every `/r/` path
+answers the same 404 as any unknown path.
+
+- **What a reviewer sees.** Only entries in `reviewer/experiments.json` that carry `"reviewer": true`, and only
+  attachments that carry `"reviewer": true` and whose bytes in `reviewer/files/` match the `sha256` recorded at
+  build time. Everything else answers 404, the same as an entry that does not exist. Review tasks are never
+  shown. One entry slug is refused in code whatever the content says (`REVIEW_NEVER` in `app.py`).
+- **Read-only.** Under `/r/` there is no task, answer, export, reading-log or listing route, pages carry no
+  script (`Content-Security-Policy: default-src 'none'` plus inline styles, same-site images and fonts), and a
+  reviewer request writes nothing to disk. The only state it changes is the wrong-password counter, in memory.
+- **Sign-in.** `reviewer_auth.py` keeps a salted scrypt hash of the password and a signing key in the data
+  directory, never in the repo or the image. The session cookie is signed, lasts 30 days and is `HttpOnly`,
+  `Secure`, `SameSite=Lax`, `Path=/r/`. Five wrong tries lock a client out for 15 minutes; 60 wrong tries from
+  anywhere in 15 minutes lock sign-in for everyone until they age out. Setting a new password signs everyone out.
+- **Content.** `tools/build_reviewer.py` makes the reviewer copies from a private rules file: exact edits, every
+  script removed, root links pointed at `/r/`, then a leak check. A file with any hit is refused and reported.
+  `tools/push.sh push-reviewer` builds and swaps the result onto the zone (the previous set stays as
+  `reviewer.old`).
+
+```sh
+printf '%s' "$PASSWORD" | oh app ssh n1 'python3 /app/reviewer_auth.py set'   # on: password from stdin, never an argument
+oh app ssh n1 'python3 /app/reviewer_auth.py status'
+oh app ssh n1 'python3 /app/reviewer_auth.py off'                              # off: parks the file, area answers 404
+tools/push.sh push-reviewer
+```
+
+To let readers reach it, add the prefix with its trailing slash: `public_paths = ["/healthz", "/r/"]`. Only
+paths under `/r/` become public; link to `/r/`, not `/r`.
+
+**Owner guard (optional second fence).** The zone's router marks requests it has authenticated as the owner's
+with `X-OpenHost-Is-Owner: true` and strips that header from clients. With a file `owner_guard` containing
+`enforce` in the data directory, every route except `/healthz` and `/r/` answers 403 without that mark. Remove
+the file to turn it off.
+
+    python3 -m unittest discover -s tests -p "test_reviewer.py" -v
+    python3 -m unittest discover -s tests -p "test_build_reviewer.py" -v
 
 ## Reading log
 
