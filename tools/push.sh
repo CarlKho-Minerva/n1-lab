@@ -15,10 +15,12 @@ push)
   ;;
 push-reviewer)
   # The build refuses any file with a leak-check hit and exits non-zero (leaving the last good build) on a bad rule.
-  python3 tools/build_reviewer.py --rules private/reviewer_rules.json --content private/content --out private/reviewer_build
-  [ -f private/reviewer_build/reviewer/experiments.json ] || { echo "FAIL: no reviewer build to push" >&2; exit 1; }
+  # N1_PRIVATE points at the private folder when this script runs from another checkout of the repo.
+  P=${N1_PRIVATE:-private}
+  python3 tools/build_reviewer.py --rules "$P/reviewer_rules.json" --content "$P/content" --out "$P/reviewer_build"
+  [ -f "$P/reviewer_build/reviewer/experiments.json" ] || { echo "FAIL: no reviewer build to push" >&2; exit 1; }
   # Unpack beside the live folder, check it arrived whole, then swap. A failed copy leaves the live folder untouched.
-  tar czf - -C private/reviewer_build reviewer | "$OH" app ssh n1 'set -e; cd /data/app_data/n1; rm -rf reviewer.new; mkdir reviewer.new; tar xzf - -C reviewer.new; test -f reviewer.new/reviewer/experiments.json; rm -rf reviewer.old; if [ -d reviewer ]; then mv reviewer reviewer.old; fi; mv reviewer.new/reviewer reviewer; rmdir reviewer.new; echo "reviewer files on the zone: $(ls reviewer/files | wc -l)"' \
+  tar czf - -C "$P/reviewer_build" reviewer | "$OH" app ssh n1 'set -e; cd /data/app_data/n1; rm -rf reviewer.new; mkdir reviewer.new; tar xzf - -C reviewer.new; test -f reviewer.new/reviewer/experiments.json; rm -rf reviewer.old; if [ -d reviewer ]; then mv reviewer reviewer.old; fi; mv reviewer.new/reviewer reviewer; rmdir reviewer.new; echo "reviewer files on the zone: $(ls reviewer/files | wc -l)"' \
     || { echo "FAIL: the reviewer copy did not reach the zone; what was live before is still live" >&2; exit 1; }
   ;;
 pull)
